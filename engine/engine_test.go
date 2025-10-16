@@ -625,3 +625,35 @@ func TestUpdateCall(t *testing.T) {
 		t.Fatalf("expected completed status, got %s", got.Status)
 	}
 }
+
+func TestListIncomingPhoneNumber(t *testing.T) {
+	e := engine.NewEngine(engine.WithManualClock())
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234", "+5678")
+
+	params := (&twilioopenapi.ListIncomingPhoneNumberParams{}).
+		SetPathAccountSid(string(subAccount.SID))
+
+	list, err := e.ListIncomingPhoneNumber(params)
+	if err != nil {
+		t.Fatalf("list numbers failed: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 numbers, got %d", len(list))
+	}
+
+	filtered, err := e.ListIncomingPhoneNumber((&twilioopenapi.ListIncomingPhoneNumberParams{}).
+		SetPathAccountSid(string(subAccount.SID)).
+		SetPhoneNumber("+1234"))
+	if err != nil {
+		t.Fatalf("list numbers with filter failed: %v", err)
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 number, got %d", len(filtered))
+	}
+	if filtered[0].PhoneNumber == nil || *filtered[0].PhoneNumber != "+1234" {
+		t.Fatalf("expected number +1234, got %v", filtered[0].PhoneNumber)
+	}
+}

@@ -32,6 +32,11 @@ func (c *Client) CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncomingP
 	return c.engine.CreateIncomingPhoneNumber(params)
 }
 
+// ListIncomingPhoneNumber returns provisioned numbers for an account
+func (c *Client) ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingPhoneNumberParams) ([]twilioopenapi.ApiV2010IncomingPhoneNumber, error) {
+	return c.engine.ListIncomingPhoneNumber(params)
+}
+
 // CreateCall creates a new call via the engine using Twilio's generated params
 func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error) {
 	return c.engine.CreateCall(params)

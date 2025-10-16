@@ -115,6 +115,8 @@ type Engine interface {
   // SubAccount management
   CreateAccount(params *openapi.CreateAccountParams) (*openapi.ApiV2010Account, error)
   ListAccount(params *openapi.ListAccountParams) ([]openapi.ApiV2010Account, error)
+  CreateIncomingPhoneNumber(params *openapi.CreateIncomingPhoneNumberParams) (*openapi.ApiV2010IncomingPhoneNumber, error)
+  ListIncomingPhoneNumber(params *openapi.ListIncomingPhoneNumberParams) ([]openapi.ApiV2010IncomingPhoneNumber, error)
 
   // Core lifecycle
   CreateCall(params *openapi.CreateCallParams) (*openapi.ApiV2010Call, error)
