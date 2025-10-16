@@ -23,6 +23,7 @@ type Engine interface {
 	ListAccount(params *twilioopenapi.ListAccountParams) ([]twilioopenapi.ApiV2010Account, error)
 	CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncomingPhoneNumberParams) (*twilioopenapi.ApiV2010IncomingPhoneNumber, error)
 	ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingPhoneNumberParams) ([]twilioopenapi.ApiV2010IncomingPhoneNumber, error)
+	DeleteIncomingPhoneNumber(sid string, params *twilioopenapi.DeleteIncomingPhoneNumberParams) error
 
 	// Core lifecycle
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
@@ -458,6 +459,32 @@ func (e *EngineImpl) ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingP
 	}
 
 	return result, nil
+}
+
+// DeleteIncomingPhoneNumber removes a provisioned number
+func (e *EngineImpl) DeleteIncomingPhoneNumber(sid string, _ *twilioopenapi.DeleteIncomingPhoneNumberParams) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	for accountSID, numbers := range e.incomingNumbers {
+		for phone, rec := range numbers {
+			if string(rec.SID) == sid {
+				delete(numbers, phone)
+				sa := e.subAccounts[accountSID]
+				if sa != nil {
+					filtered := make([]string, 0, len(sa.IncomingNumbers))
+					for _, n := range sa.IncomingNumbers {
+						if n != phone {
+							filtered = append(filtered, n)
+						}
+					}
+					sa.IncomingNumbers = filtered
+				}
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("incoming phone number %s not found", sid)
 }
 
 // UpdateCall applies updates to an existing call (status, callback URL, etc.)

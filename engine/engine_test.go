@@ -656,4 +656,17 @@ func TestListIncomingPhoneNumber(t *testing.T) {
 	if filtered[0].PhoneNumber == nil || *filtered[0].PhoneNumber != "+1234" {
 		t.Fatalf("expected number +1234, got %v", filtered[0].PhoneNumber)
 	}
+
+	numberSID := *list[0].Sid
+	if err := e.DeleteIncomingPhoneNumber(numberSID, nil); err != nil {
+		t.Fatalf("delete number failed: %v", err)
+	}
+
+	recheck, err := e.ListIncomingPhoneNumber(params)
+	if err != nil {
+		t.Fatalf("list after delete failed: %v", err)
+	}
+	if len(recheck) != 1 {
+		t.Fatalf("expected 1 number after delete, got %d", len(recheck))
+	}
 }

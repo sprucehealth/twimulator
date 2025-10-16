@@ -37,6 +37,11 @@ func (c *Client) ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingPhone
 	return c.engine.ListIncomingPhoneNumber(params)
 }
 
+// DeleteIncomingPhoneNumber removes a provisioned number
+func (c *Client) DeleteIncomingPhoneNumber(sid string, params *twilioopenapi.DeleteIncomingPhoneNumberParams) error {
+	return c.engine.DeleteIncomingPhoneNumber(sid, params)
+}
+
 // CreateCall creates a new call via the engine using Twilio's generated params
 func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error) {
 	return c.engine.CreateCall(params)
