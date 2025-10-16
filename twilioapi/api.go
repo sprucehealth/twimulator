@@ -42,6 +42,11 @@ func (c *Client) DeleteIncomingPhoneNumber(sid string, params *twilioopenapi.Del
 	return c.engine.DeleteIncomingPhoneNumber(sid, params)
 }
 
+// CreateApplication provisions a Twilio application for an account
+func (c *Client) CreateApplication(params *twilioopenapi.CreateApplicationParams) (*twilioopenapi.ApiV2010Application, error) {
+	return c.engine.CreateApplication(params)
+}
+
 // CreateCall creates a new call via the engine using Twilio's generated params
 func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error) {
 	return c.engine.CreateCall(params)

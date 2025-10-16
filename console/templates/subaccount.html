@@ -48,6 +48,41 @@
                             {{end}}
                         </div>
                     </div>
+                    <div class="detail-item">
+                        <label>Applications</label>
+                        <div class="number-list">
+                            {{if .SubAccount.Applications}}
+                                <table class="mini-table">
+                                    <thead>
+                                        <tr>
+                                            <th>SID</th>
+                                            <th>Name</th>
+                                            <th>Voice URL</th>
+                                            <th>Voice Method</th>
+                                            <th>Status Callback</th>
+                                            <th>Callback Method</th>
+                                            <th>Created</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {{range .SubAccount.Applications}}
+                                        <tr>
+                                            <td>{{.SID}}</td>
+                                            <td>{{if .FriendlyName}}{{.FriendlyName}}{{else}}&mdash;{{end}}</td>
+                                            <td>{{if .VoiceURL}}<a href="{{.VoiceURL}}" target="_blank">{{.VoiceURL}}</a>{{else}}&mdash;{{end}}</td>
+                                            <td>{{if .VoiceMethod}}{{.VoiceMethod}}{{else}}&mdash;{{end}}</td>
+                                            <td>{{if .StatusCallback}}{{.StatusCallback}}{{else}}&mdash;{{end}}</td>
+                                            <td>{{if .StatusCallbackMethod}}{{.StatusCallbackMethod}}{{else}}&mdash;{{end}}</td>
+                                            <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                                        </tr>
+                                        {{end}}
+                                    </tbody>
+                                </table>
+                            {{else}}
+                                <em>None</em>
+                            {{end}}
+                        </div>
+                    </div>
                 </div>
             </div>
 

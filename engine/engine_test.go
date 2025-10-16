@@ -670,3 +670,50 @@ func TestListIncomingPhoneNumber(t *testing.T) {
 		t.Fatalf("expected 1 number after delete, got %d", len(recheck))
 	}
 }
+
+func TestCreateApplication(t *testing.T) {
+	e := engine.NewEngine(engine.WithManualClock())
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+	params := (&twilioopenapi.CreateApplicationParams{}).
+		SetPathAccountSid(string(subAccount.SID)).
+		SetFriendlyName("Voice App").
+		SetVoiceUrl("http://example.com/voice").
+		SetVoiceMethod("POST").
+		SetStatusCallback("http://example.com/status").
+		SetStatusCallbackMethod("GET")
+
+	app, err := e.CreateApplication(params)
+	if err != nil {
+		t.Fatalf("create application failed: %v", err)
+	}
+	if app.Sid == nil {
+		t.Fatal("expected application SID")
+	}
+
+	snap := e.Snapshot()
+	sa := snap.SubAccounts[subAccount.SID]
+	if sa == nil || len(sa.Applications) != 1 {
+		t.Fatalf("expected application recorded on subaccount")
+	}
+	appInfo := sa.Applications[0]
+	if appInfo.SID != *app.Sid {
+		t.Fatalf("expected application SID %s, got %s", *app.Sid, appInfo.SID)
+	}
+	if appInfo.FriendlyName != "Voice App" {
+		t.Fatalf("expected friendly name to persist")
+	}
+	if appInfo.VoiceURL != "http://example.com/voice" {
+		t.Fatalf("expected voice URL copied, got %s", appInfo.VoiceURL)
+	}
+	if appInfo.VoiceMethod != "POST" {
+		t.Fatalf("expected voice method POST, got %s", appInfo.VoiceMethod)
+	}
+	if appInfo.StatusCallback != "http://example.com/status" {
+		t.Fatalf("expected status callback copied, got %s", appInfo.StatusCallback)
+	}
+	if appInfo.StatusCallbackMethod != "GET" {
+		t.Fatalf("expected status callback method GET, got %s", appInfo.StatusCallbackMethod)
+	}
+}

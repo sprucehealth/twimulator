@@ -36,6 +36,17 @@ type accountView struct {
 	CreatedAt    time.Time
 	AuthToken    string
 	Numbers      []string
+	Applications []applicationView
+}
+
+type applicationView struct {
+	SID                  string
+	FriendlyName         string
+	VoiceURL             string
+	VoiceMethod          string
+	StatusCallback       string
+	StatusCallbackMethod string
+	CreatedAt            time.Time
 }
 
 // NewConsoleServer creates a new console server
@@ -110,6 +121,19 @@ func (cs *ConsoleServer) handleSubAccounts(w http.ResponseWriter, r *http.Reques
 	for i := range views {
 		if sa, ok := snap.SubAccounts[model.SID(views[i].SID)]; ok {
 			views[i].Numbers = append([]string{}, sa.IncomingNumbers...)
+			apps := make([]applicationView, len(sa.Applications))
+			for idx, app := range sa.Applications {
+				apps[idx] = applicationView{
+					SID:                  app.SID,
+					FriendlyName:         app.FriendlyName,
+					VoiceURL:             app.VoiceURL,
+					VoiceMethod:          app.VoiceMethod,
+					StatusCallback:       app.StatusCallback,
+					StatusCallbackMethod: app.StatusCallbackMethod,
+					CreatedAt:            app.CreatedAt,
+				}
+			}
+			views[i].Applications = apps
 		}
 	}
 
@@ -164,6 +188,19 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 		return
 	}
 	view.Numbers = append([]string{}, subAccountModel.IncomingNumbers...)
+	apps := make([]applicationView, len(subAccountModel.Applications))
+	for idx, app := range subAccountModel.Applications {
+		apps[idx] = applicationView{
+			SID:                  app.SID,
+			FriendlyName:         app.FriendlyName,
+			VoiceURL:             app.VoiceURL,
+			VoiceMethod:          app.VoiceMethod,
+			StatusCallback:       app.StatusCallback,
+			StatusCallbackMethod: app.StatusCallbackMethod,
+			CreatedAt:            app.CreatedAt,
+		}
+	}
+	view.Applications = apps
 
 	// Filter calls by AccountSID
 	calls := make([]*model.Call, 0)

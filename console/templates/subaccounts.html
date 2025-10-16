@@ -29,6 +29,7 @@
                         <th>Status</th>
                         <th>Created At</th>
                         <th>Incoming Numbers</th>
+                        <th>Applications</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -41,6 +42,13 @@
                         <td>
                             {{if .Numbers}}
                                 {{len .Numbers}}
+                            {{else}}
+                                0
+                            {{end}}
+                        </td>
+                        <td>
+                            {{if .Applications}}
+                                {{len .Applications}}
                             {{else}}
                                 0
                             {{end}}

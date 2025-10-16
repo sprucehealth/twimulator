@@ -90,21 +90,34 @@ type Event struct {
 
 // SubAccount represents a Twilio subaccount
 type SubAccount struct {
-	SID          SID       `json:"sid"`
-	FriendlyName string    `json:"friendly_name"`
-	Status       string    `json:"status"` // "active", "suspended", "closed"
-	CreatedAt    time.Time `json:"created_at"`
-	AuthToken    string    `json:"auth_token"`
-	IncomingNumbers []string `json:"incoming_numbers"`
+	SID             SID           `json:"sid"`
+	FriendlyName    string        `json:"friendly_name"`
+	Status          string        `json:"status"` // "active", "suspended", "closed"
+	CreatedAt       time.Time     `json:"created_at"`
+	AuthToken       string        `json:"auth_token"`
+	IncomingNumbers []string      `json:"incoming_numbers"`
+	Applications    []Application `json:"applications"`
+}
+
+// Application represents a Twilio application tied to a subaccount
+type Application struct {
+	SID                  string    `json:"sid"`
+	FriendlyName         string    `json:"friendly_name,omitempty"`
+	VoiceMethod          string    `json:"voice_method,omitempty"`
+	VoiceURL             string    `json:"voice_url,omitempty"`
+	StatusCallbackMethod string    `json:"status_callback_method,omitempty"`
+	StatusCallback       string    `json:"status_callback,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
 }
 
 // SID generators with atomic counters for determinism
 var (
-	callCounter       uint64
-	conferenceCounter uint64
-	queueCounter      uint64
-	subAccountCounter uint64
+	callCounter        uint64
+	conferenceCounter  uint64
+	queueCounter       uint64
+	subAccountCounter  uint64
 	phoneNumberCounter uint64
+	applicationCounter uint64
 )
 
 // NewCallSID generates a new Call SID (CA prefix)
@@ -130,6 +143,14 @@ func NewQueueSID() SID {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return SID(fmt.Sprintf("QU%08x%s", counter, hex.EncodeToString(b)[:8]))
+}
+
+// NewApplicationSID generates a new Application SID (AP prefix)
+func NewApplicationSID() SID {
+	counter := atomic.AddUint64(&applicationCounter, 1)
+	b := make([]byte, 4)
+	rand.Read(b)
+	return SID(fmt.Sprintf("AP%08x%s", counter, hex.EncodeToString(b)[:8]))
 }
 
 // NewSubAccountSID generates a new SubAccount SID (AC prefix)

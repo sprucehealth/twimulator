@@ -117,6 +117,8 @@ type Engine interface {
   ListAccount(params *openapi.ListAccountParams) ([]openapi.ApiV2010Account, error)
   CreateIncomingPhoneNumber(params *openapi.CreateIncomingPhoneNumberParams) (*openapi.ApiV2010IncomingPhoneNumber, error)
   ListIncomingPhoneNumber(params *openapi.ListIncomingPhoneNumberParams) ([]openapi.ApiV2010IncomingPhoneNumber, error)
+  DeleteIncomingPhoneNumber(sid string, params *openapi.DeleteIncomingPhoneNumberParams) error
+  CreateApplication(params *openapi.CreateApplicationParams) (*openapi.ApiV2010Application, error)
 
   // Core lifecycle
   CreateCall(params *openapi.CreateCallParams) (*openapi.ApiV2010Call, error)
@@ -145,6 +147,7 @@ type Engine interface {
 //   Timeout (seconds)
 //   CallToken (optional)
 // Always provision `From` numbers first via `CreateIncomingPhoneNumber`.
+// Applications can be provisioned with `CreateApplication` to capture Voice URL and callback configuration (currently surfaced in the console for inspection).
 
 
 type CallFilter struct { To, From string; Status *model.CallStatus }
@@ -259,12 +262,8 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
     if err != nil { t.Fatalf("failed to provision number: %v", err) }
   }
 
-  for _, phone := range []string{"+155512301", "+155512302", "+15551234099"} {
+  for _, phone := range []string{"+155512301", "+155512302", "+15551234003", "+15551234004", "+15551234005", "+15551234099"} {
     mustCreateNumber(phone)
-  }
-
-  for i := 1; i <= 3; i++ {
-    mustCreateNumber(fmt.Sprintf("+1555123400%d", i+2))
   }
 
   // 1) Create first call; it answers and enqueues into "support"

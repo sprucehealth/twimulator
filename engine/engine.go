@@ -24,6 +24,7 @@ type Engine interface {
 	CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncomingPhoneNumberParams) (*twilioopenapi.ApiV2010IncomingPhoneNumber, error)
 	ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingPhoneNumberParams) ([]twilioopenapi.ApiV2010IncomingPhoneNumber, error)
 	DeleteIncomingPhoneNumber(sid string, params *twilioopenapi.DeleteIncomingPhoneNumberParams) error
+	CreateApplication(params *twilioopenapi.CreateApplicationParams) (*twilioopenapi.ApiV2010Application, error)
 
 	// Core lifecycle
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
@@ -73,6 +74,7 @@ type EngineImpl struct {
 	// Subaccount management
 	subAccounts     map[model.SID]*model.SubAccount
 	incomingNumbers map[model.SID]map[string]*incomingNumber
+	applications    map[model.SID]map[model.SID]*applicationRecord
 
 	// Resources are scoped by subaccount SID
 	calls       map[model.SID]*model.Call                  // All calls across all subaccounts
@@ -93,6 +95,16 @@ type incomingNumber struct {
 	SID         model.SID
 	PhoneNumber string
 	CreatedAt   time.Time
+}
+
+type applicationRecord struct {
+	SID                  model.SID
+	FriendlyName         string
+	VoiceMethod          string
+	VoiceURL             string
+	StatusCallbackMethod string
+	StatusCallback       string
+	CreatedAt            time.Time
 }
 
 // WithManualClock configures the engine to use a manual clock
@@ -133,6 +145,7 @@ func NewEngine(opts ...EngineOption) *EngineImpl {
 		apiVersion:      "2010-04-01",
 		subAccounts:     make(map[model.SID]*model.SubAccount),
 		incomingNumbers: make(map[model.SID]map[string]*incomingNumber),
+		applications:    make(map[model.SID]map[model.SID]*applicationRecord),
 		calls:           make(map[model.SID]*model.Call),
 		queues:          make(map[model.SID]map[string]*model.Queue),
 		conferences:     make(map[model.SID]map[string]*model.Conference),
@@ -176,6 +189,7 @@ func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*
 	e.queues[subAccount.SID] = make(map[string]*model.Queue)
 	e.conferences[subAccount.SID] = make(map[string]*model.Conference)
 	e.incomingNumbers[subAccount.SID] = make(map[string]*incomingNumber)
+	e.applications[subAccount.SID] = make(map[model.SID]*applicationRecord)
 
 	sidStr := string(sid)
 	authTokenCopy := authToken
@@ -487,6 +501,80 @@ func (e *EngineImpl) DeleteIncomingPhoneNumber(sid string, _ *twilioopenapi.Dele
 	return fmt.Errorf("incoming phone number %s not found", sid)
 }
 
+// CreateApplication registers a Twilio Application for an account
+func (e *EngineImpl) CreateApplication(params *twilioopenapi.CreateApplicationParams) (*twilioopenapi.ApiV2010Application, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+	friendly := ""
+	if params.FriendlyName != nil {
+		friendly = *params.FriendlyName
+	}
+	voiceURL := ""
+	if params.VoiceUrl != nil {
+		voiceURL = *params.VoiceUrl
+	}
+	voiceMethod := ""
+	if params.VoiceMethod != nil {
+		voiceMethod = *params.VoiceMethod
+	}
+	statusCallback := ""
+	if params.StatusCallback != nil {
+		statusCallback = *params.StatusCallback
+	}
+	statusCallbackMethod := ""
+	if params.StatusCallbackMethod != nil {
+		statusCallbackMethod = *params.StatusCallbackMethod
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	subAccount, exists := e.subAccounts[accountSID]
+	if !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	recMap := e.applications[accountSID]
+	if recMap == nil {
+		recMap = make(map[model.SID]*applicationRecord)
+		e.applications[accountSID] = recMap
+	}
+
+	now := e.clock.Now()
+	sid := model.NewApplicationSID()
+	rec := &applicationRecord{
+		SID:                  sid,
+		FriendlyName:         friendly,
+		VoiceMethod:          voiceMethod,
+		VoiceURL:             voiceURL,
+		StatusCallbackMethod: statusCallbackMethod,
+		StatusCallback:       statusCallback,
+		CreatedAt:            now,
+	}
+	recMap[sid] = rec
+	subAccount.Applications = append(subAccount.Applications, model.Application{
+		SID:                  string(sid),
+		FriendlyName:         friendly,
+		VoiceMethod:          voiceMethod,
+		VoiceURL:             voiceURL,
+		StatusCallbackMethod: statusCallbackMethod,
+		StatusCallback:       statusCallback,
+		CreatedAt:            now,
+	})
+
+	sidStr := string(sid)
+	dateCreated := now.UTC().Format(time.RFC1123Z)
+
+	return &twilioopenapi.ApiV2010Application{
+		Sid:          &sidStr,
+		FriendlyName: &friendly,
+		DateCreated:  &dateCreated,
+	}, nil
+}
+
 // UpdateCall applies updates to an existing call (status, callback URL, etc.)
 func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error) {
 	e.mu.Lock()
@@ -691,6 +779,11 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 		saCopy := *sa
 		if sa.IncomingNumbers != nil {
 			saCopy.IncomingNumbers = append([]string{}, sa.IncomingNumbers...)
+		}
+		if sa.Applications != nil {
+			apps := make([]model.Application, len(sa.Applications))
+			copy(apps, sa.Applications)
+			saCopy.Applications = apps
 		}
 		snap.SubAccounts[sid] = &saCopy
 	}
