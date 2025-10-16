@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
+	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 
 	"twimulator/console"
 	"twimulator/engine"
@@ -24,7 +24,7 @@ func main() {
 	defer e.Close()
 
 	// Create a subaccount for our demo
-	accountParams := (&twilioopenapi.CreateAccountParams{}).SetFriendlyName("Demo SubAccount")
+	accountParams := (&openapi.CreateAccountParams{}).SetFriendlyName("Demo SubAccount")
 	account, err := e.CreateAccount(accountParams)
 	if err != nil {
 		log.Fatalf("Failed to create subaccount: %v", err)
@@ -146,29 +146,49 @@ func main() {
 	log.Println("Creating demo scenario...")
 	log.Println("")
 
+	createCall := func(params *openapi.CreateCallParams) *model.Call {
+		apiCall, err := e.CreateCall(params)
+		if err != nil {
+			log.Fatalf("Failed to create call: %v", err)
+		}
+		if apiCall.Sid == nil {
+			log.Fatalf("CreateCall did not return SID")
+		}
+		sid := model.SID(*apiCall.Sid)
+		call, ok := e.GetCall(sid)
+		if !ok {
+			log.Fatalf("Call %s not found after creation", sid)
+		}
+		return call
+	}
+
+	newCallParams := func(from, to, url string) *openapi.CreateCallParams {
+		params := &openapi.CreateCallParams{}
+		params.SetPathAccountSid(string(subAccount.SID))
+		if from != "" {
+			params.SetFrom(from)
+		}
+		if to != "" {
+			params.SetTo(to)
+		}
+		params.SetUrl(url)
+		return params
+	}
+
 	// Scenario: Queue and Conference demo
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 
 		log.Println("1. Creating inbound customer call...")
-		call1, _ := e.CreateCall(engine.CreateCallParams{
-			AccountSID:     subAccount.SID,
-			From:           "+15551234001",
-			To:             "+18005551000",
-			AnswerURL:      testSrv.URL + "/voice/inbound",
-			StatusCallback: testSrv.URL + "/voice/status",
-		})
+		params1 := newCallParams("+15551234001", "+18005551000", testSrv.URL+"/voice/inbound")
+		params1.SetStatusCallback(testSrv.URL + "/voice/status")
+		call1 := createCall(params1)
 		log.Printf("   Created call %s\n", call1.SID)
 
 		time.Sleep(2 * time.Second)
 
 		log.Println("2. Creating agent call to handle queue...")
-		call2, _ := e.CreateCall(engine.CreateCallParams{
-			AccountSID: subAccount.SID,
-			From:       "+15551234002",
-			To:         "+18005551001",
-			AnswerURL:  testSrv.URL + "/voice/agent",
-		})
+		call2 := createCall(newCallParams("+15551234002", "+18005551001", testSrv.URL+"/voice/agent"))
 		log.Printf("   Created call %s\n", call2.SID)
 
 		time.Sleep(3 * time.Second)
@@ -176,12 +196,7 @@ func main() {
 		log.Println("3. Creating conference calls...")
 		for i := 1; i <= 3; i++ {
 			from := fmt.Sprintf("+1555123400%d", i+2)
-			call, _ := e.CreateCall(engine.CreateCallParams{
-				AccountSID: subAccount.SID,
-				From:       from,
-				To:         "+18005551002",
-				AnswerURL:  testSrv.URL + "/voice/conference",
-			})
+			call := createCall(newCallParams(from, "+18005551002", testSrv.URL+"/voice/conference"))
 			log.Printf("   Created conference call %s\n", call.SID)
 			time.Sleep(500 * time.Millisecond)
 		}
@@ -189,12 +204,7 @@ func main() {
 		time.Sleep(2 * time.Second)
 
 		log.Println("4. Creating gather demo call...")
-		call3, _ := e.CreateCall(engine.CreateCallParams{
-			AccountSID: subAccount.SID,
-			From:       "+15551234099",
-			To:         "+18005551003",
-			AnswerURL:  testSrv.URL + "/voice/gather",
-		})
+		call3 := createCall(newCallParams("+15551234099", "+18005551003", testSrv.URL+"/voice/gather"))
 		log.Printf("   Created call %s\n", call3.SID)
 
 		time.Sleep(1 * time.Second)

@@ -45,17 +45,10 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	// 1) Create first call; it answers and enqueues into "support"
-	c1, err := e.CreateCall(engine.CreateCallParams{
-		AccountSID:     subAccount.SID,
-		From:           "+155512301",
-		To:             "+180055501",
-		AnswerURL:      "http://test/voice/inbound",
-		StatusCallback: "http://test/voice/status",
-		Timeout:        2 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("Failed to create call: %v", err)
-	}
+	params1 := newCreateCallParams(subAccount.SID, "+155512301", "+180055501", "http://test/voice/inbound")
+	params1.SetStatusCallback("http://test/voice/status")
+	params1.SetTimeout(int((2 * time.Second) / time.Second))
+	c1 := mustCreateCall(t, e, params1)
 
 	// Give goroutines time to start
 	time.Sleep(10 * time.Millisecond)
@@ -83,15 +76,8 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	}
 
 	// 2) Create second call that dials the same queue
-	c2, err := e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
-		From:       "+155512302",
-		To:         "+180055502",
-		AnswerURL:  "http://test/voice/agent",
-	})
-	if err != nil {
-		t.Fatalf("Failed to create second call: %v", err)
-	}
+	params2 := newCreateCallParams(subAccount.SID, "+155512302", "+180055502", "http://test/voice/agent")
+	c2 := mustCreateCall(t, e, params2)
 
 	time.Sleep(10 * time.Millisecond)
 	e.Advance(5 * time.Second)
@@ -167,15 +153,8 @@ func TestGatherWithDigits(t *testing.T) {
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
 
-	call, err := e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
-		From:       "+1234",
-		To:         "+5678",
-		AnswerURL:  "http://test/answer",
-	})
-	if err != nil {
-		t.Fatalf("Failed to create call: %v", err)
-	}
+	params := newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer")
+	call := mustCreateCall(t, e, params)
 
 	// Give goroutines time to start
 	time.Sleep(10 * time.Millisecond)
@@ -226,12 +205,7 @@ func TestGatherTimeout(t *testing.T) {
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
 
-	call, _ := e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
-		From:       "+1234",
-		To:         "+5678",
-		AnswerURL:  "http://test/answer",
-	})
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
 
@@ -288,12 +262,7 @@ func TestRedirect(t *testing.T) {
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
 
-	call, _ := e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
-		From:       "+1234",
-		To:         "+5678",
-		AnswerURL:  "http://test/answer",
-	})
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
 	e.Advance(2 * time.Second)
@@ -328,19 +297,8 @@ func TestConference(t *testing.T) {
 	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	// Create two calls to join conference
-	call1, _ := e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
-		From:       "+1111",
-		To:         "+2222",
-		AnswerURL:  "http://test/answer",
-	})
-
-	call2, _ := e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
-		From:       "+3333",
-		To:         "+4444",
-		AnswerURL:  "http://test/answer",
-	})
+	call1 := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1111", "+2222", "http://test/answer"))
+	call2 := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+3333", "+4444", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
 	e.Advance(2 * time.Second)
@@ -400,13 +358,9 @@ func TestStatusCallbacks(t *testing.T) {
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
 
-	call, _ := e.CreateCall(engine.CreateCallParams{
-		AccountSID:     subAccount.SID,
-		From:           "+1234",
-		To:             "+5678",
-		AnswerURL:      "http://test/answer",
-		StatusCallback: "http://test/status",
-	})
+	params := newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer")
+	params.SetStatusCallback("http://test/status")
+	call := mustCreateCall(t, e, params)
 
 	time.Sleep(10 * time.Millisecond)
 	e.Advance(2 * time.Second)
@@ -443,13 +397,9 @@ func TestCallNoAnswer(t *testing.T) {
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
 
-	call, _ := e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
-		From:       "+1234",
-		To:         "+5678",
-		AnswerURL:  "http://test/answer",
-		Timeout:    2 * time.Second,
-	})
+	params := newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer")
+	params.SetTimeout(int((2 * time.Second) / time.Second))
+	call := mustCreateCall(t, e, params)
 
 	time.Sleep(10 * time.Millisecond)
 
@@ -480,26 +430,9 @@ func TestListCallsFilter(t *testing.T) {
 	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	// Create multiple calls
-	e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
-		From:       "+1111",
-		To:         "+2222",
-		AnswerURL:  "http://test/answer",
-	})
-
-	e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
-		From:       "+3333",
-		To:         "+2222",
-		AnswerURL:  "http://test/answer",
-	})
-
-	e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
-		From:       "+1111",
-		To:         "+4444",
-		AnswerURL:  "http://test/answer",
-	})
+	mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1111", "+2222", "http://test/answer"))
+	mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+3333", "+2222", "http://test/answer"))
+	mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1111", "+4444", "http://test/answer"))
 
 	// Filter by To
 	calls := e.ListCalls(engine.CallFilter{To: "+2222"})
@@ -591,4 +524,36 @@ func TestListAccountFiltersByFriendlyName(t *testing.T) {
 		}
 	}
 	_ = acct2
+}
+
+func newCreateCallParams(accountSID model.SID, from, to, url string) *twilioopenapi.CreateCallParams {
+	params := &twilioopenapi.CreateCallParams{}
+	params.SetPathAccountSid(string(accountSID))
+	if from != "" {
+		params.SetFrom(from)
+	}
+	if to != "" {
+		params.SetTo(to)
+	}
+	if url != "" {
+		params.SetUrl(url)
+	}
+	return params
+}
+
+func mustCreateCall(t *testing.T, e *engine.EngineImpl, params *twilioopenapi.CreateCallParams) *model.Call {
+	t.Helper()
+	apiCall, err := e.CreateCall(params)
+	if err != nil {
+		t.Fatalf("failed to create call: %v", err)
+	}
+	if apiCall.Sid == nil {
+		t.Fatal("create call did not return SID")
+	}
+	sid := model.SID(*apiCall.Sid)
+	call, ok := e.GetCall(sid)
+	if !ok {
+		t.Fatalf("call %s not found after creation", sid)
+	}
+	return call
 }

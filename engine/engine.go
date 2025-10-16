@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,7 +23,7 @@ type Engine interface {
 	ListAccount(params *twilioopenapi.ListAccountParams) ([]twilioopenapi.ApiV2010Account, error)
 
 	// Core lifecycle
-	CreateCall(params CreateCallParams) (*model.Call, error)
+	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
 	Hangup(callSID model.SID) error
 	SendDigits(callSID model.SID, digits string) error
 
@@ -40,18 +41,6 @@ type Engine interface {
 
 	// Shutdown
 	Close() error
-}
-
-// CreateCallParams defines parameters for creating a call
-type CreateCallParams struct {
-	AccountSID       model.SID // SubAccount SID (required)
-	From             string
-	To               string
-	AnswerURL        string
-	StatusCallback   string
-	MachineDetection bool
-	Timeout          time.Duration
-	Vars             map[string]string
 }
 
 // CallFilter allows filtering calls
@@ -234,49 +223,96 @@ func (e *EngineImpl) ListAccount(params *twilioopenapi.ListAccountParams) ([]twi
 	return results, nil
 }
 
-// CreateCall initiates a new call
-func (e *EngineImpl) CreateCall(params CreateCallParams) (*model.Call, error) {
+// CreateCall initiates a new call using Twilio-compatible parameters
+func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error) {
+	if params == nil {
+		return nil, fmt.Errorf("params is required")
+	}
+
+	accountSID := ""
+	if params.PathAccountSid != nil {
+		accountSID = *params.PathAccountSid
+	}
+	if accountSID == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+
+	answerURL := ""
+	if params.Url != nil {
+		answerURL = *params.Url
+	}
+	if answerURL == "" {
+		return nil, fmt.Errorf("Url is required")
+	}
+
+	from := ""
+	if params.From != nil {
+		from = *params.From
+	}
+
+	to := ""
+	if params.To != nil {
+		to = *params.To
+	}
+
+	timeout := 30 * time.Second
+	if params.Timeout != nil && *params.Timeout > 0 {
+		timeout = time.Duration(*params.Timeout) * time.Second
+	}
+
+	statusCallback := ""
+	if params.StatusCallback != nil {
+		statusCallback = *params.StatusCallback
+	}
+
+	statusEvents := []string{}
+	if params.StatusCallbackEvent != nil {
+		statusEvents = append(statusEvents, (*params.StatusCallbackEvent)...)
+	}
+
+	callToken := ""
+	if params.CallToken != nil {
+		callToken = *params.CallToken
+	}
+
+	accountSIDModel := model.SID(accountSID)
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if params.Timeout == 0 {
-		params.Timeout = 30 * time.Second
+	if _, exists := e.subAccounts[accountSIDModel]; !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
-	if params.AnswerURL == "" {
-		return nil, fmt.Errorf("AnswerURL is required")
-	}
-
-	if params.AccountSID == "" {
-		return nil, fmt.Errorf("AccountSID is required")
-	}
-
-	// Validate subaccount exists
-	if _, exists := e.subAccounts[params.AccountSID]; !exists {
-		return nil, fmt.Errorf("subaccount %s not found", params.AccountSID)
-	}
-
+	now := e.clock.Now()
 	call := &model.Call{
 		SID:            model.NewCallSID(),
-		AccountSID:     params.AccountSID,
-		From:           params.From,
-		To:             params.To,
+		AccountSID:     accountSIDModel,
+		From:           from,
+		To:             to,
 		Direction:      model.Outbound,
 		Status:         model.CallQueued,
-		StartAt:        e.clock.Now(),
+		StartAt:        now,
 		Timeline:       []model.Event{},
-		Variables:      params.Vars,
-		AnswerURL:      params.AnswerURL,
-		StatusCallback: params.StatusCallback,
+		Variables:      make(map[string]string),
+		AnswerURL:      answerURL,
+		StatusCallback: statusCallback,
 	}
 
-	if call.Variables == nil {
-		call.Variables = make(map[string]string)
+	if len(statusEvents) > 0 {
+		call.Variables["status_callback_event"] = strings.Join(statusEvents, ",")
+	}
+	if callToken != "" {
+		call.Variables["call_token"] = callToken
 	}
 
-	// Add creation event
+	// Preserve machine detection flag if provided
+	if params.MachineDetection != nil {
+		call.Variables["machine_detection"] = *params.MachineDetection
+	}
+
 	call.Timeline = append(call.Timeline, model.NewEvent(
-		e.clock.Now(),
+		now,
 		"call.created",
 		map[string]any{
 			"sid":    call.SID,
@@ -288,8 +324,7 @@ func (e *EngineImpl) CreateCall(params CreateCallParams) (*model.Call, error) {
 
 	e.calls[call.SID] = call
 
-	// Start runner
-	runner := NewCallRunner(call, e, params.Timeout)
+	runner := NewCallRunner(call, e, timeout)
 	e.runners[call.SID] = runner
 
 	e.wg.Add(1)
@@ -298,7 +333,7 @@ func (e *EngineImpl) CreateCall(params CreateCallParams) (*model.Call, error) {
 		runner.Run(e.ctx)
 	}()
 
-	return call, nil
+	return buildAPICallResponse(call, e.apiVersion), nil
 }
 
 // Hangup terminates a call
@@ -442,6 +477,42 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 	}
 
 	return snap
+}
+
+func buildAPICallResponse(call *model.Call, apiVersion string) *twilioopenapi.ApiV2010Call {
+	sid := string(call.SID)
+	accountSid := string(call.AccountSID)
+	status := string(call.Status)
+	direction := "outbound-api"
+	if call.Direction == model.Inbound {
+		direction = "inbound"
+	}
+	dateCreated := call.StartAt.UTC().Format(time.RFC1123Z)
+	startTime := dateCreated
+	resp := &twilioopenapi.ApiV2010Call{
+		Sid:         &sid,
+		AccountSid:  &accountSid,
+		Status:      &status,
+		Direction:   &direction,
+		ApiVersion:  &apiVersion,
+		DateCreated: &dateCreated,
+		StartTime:   &startTime,
+	}
+	if call.From != "" {
+		from := call.From
+		resp.From = &from
+	}
+	if call.To != "" {
+		to := call.To
+		resp.To = &to
+	}
+	if call.EndedAt != nil {
+		end := call.EndedAt.UTC().Format(time.RFC1123Z)
+		resp.EndTime = &end
+		duration := fmt.Sprintf("%.0f", call.EndedAt.Sub(call.StartAt).Seconds())
+		resp.Duration = &duration
+	}
+	return resp
 }
 
 // SetAutoTime switches between manual and auto time

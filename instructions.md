@@ -117,7 +117,7 @@ type Engine interface {
   ListAccount(params *openapi.ListAccountParams) ([]openapi.ApiV2010Account, error)
 
   // Core lifecycle
-  CreateCall(params CreateCallParams) (*model.Call, error)
+  CreateCall(params *openapi.CreateCallParams) (*openapi.ApiV2010Call, error)
   Hangup(callSID model.SID) error
   SendDigits(callSID model.SID, digits string) error // feeds <Gather>
 
@@ -126,22 +126,22 @@ type Engine interface {
   ListCalls(filter CallFilter) []model.Call
   GetQueue(accountSID model.SID, name string) (*model.Queue, bool)  // Queues are scoped by subaccount
   GetConference(accountSID model.SID, name string) (*model.Conference, bool)  // Conferences are scoped by subaccount
-  Snapshot() StateSnapshot // JSON-serializable
+  Snapshot() *StateSnapshot // JSON-serializable
 
   // Scheduling/time
   SetAutoTime(enabled bool)
   Advance(d time.Duration)
 }
 
-type CreateCallParams struct {
-  AccountSID     model.SID // Required: SubAccount SID that owns this call
-  From, To       string
-  AnswerURL      string  // like Twilio's 'url' param
-  StatusCallback string  // optional
-  MachineDetection bool  // ignore in MVP; just store
-  Timeout        time.Duration // ring timeout; default 30s
-  Vars           map[string]string
-}
+// Calls are created with Twilio's generated `openapi.CreateCallParams` type.
+// We care about the following fields:
+//   PathAccountSid (required)
+//   From / To
+//   Url (TwiML answer URL)
+//   StatusCallback / StatusCallbackEvent
+//   Timeout (seconds)
+//   CallToken (optional)
+
 
 type CallFilter struct { To, From string; Status *model.CallStatus }
 
@@ -247,26 +247,31 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
   subAccount := snap.SubAccounts[model.SID(*acct.Sid)]
 
   // 1) Create first call; it answers and enqueues into "support"
-  c1, _ := e.CreateCall(engine.CreateCallParams{
-    AccountSID: subAccount.SID,  // All calls require AccountSID
-    From: "+155512301", To: "+180055501",
-    AnswerURL: testSrv.URL + "/voice/inbound",
-    StatusCallback: testSrv.URL + "/voice/status",
-    Timeout: 2 * time.Second,
-  })
+  params1 := (&openapi.CreateCallParams{}).
+    SetPathAccountSid(string(subAccount.SID)).
+    SetFrom("+155512301").
+    SetTo("+180055501").
+    SetUrl(testSrv.URL + "/voice/inbound").
+    SetStatusCallback(testSrv.URL + "/voice/status").
+    SetTimeout(2)
+  apiCall1, _ := e.CreateCall(params1)
+  c1SID := model.SID(*apiCall1.Sid)
+  c1, _ := e.GetCall(c1SID)
 
   // Advance until answered and gather runs
   e.Advance(3 * time.Second)
 
   // 2) Create second call that dials the same queue -> bridges to conference
-  c2, _ := e.CreateCall(engine.CreateCallParams{
-    AccountSID: subAccount.SID,  // Same subaccount - queues are scoped per subaccount
-    From: "+155512302", To: "+180055502",
-    AnswerURL: testSrv.URL + "/voice/agent",
-  })
+  apiCall2, _ := e.CreateCall((&openapi.CreateCallParams{}).
+    SetPathAccountSid(string(subAccount.SID)).
+    SetFrom("+155512302").
+    SetTo("+180055502").
+    SetUrl(testSrv.URL + "/voice/agent"))
+  c2SID := model.SID(*apiCall2.Sid)
+  c2, _ := e.GetCall(c2SID)
   e.Advance(5 * time.Second)
 
-  snap := e.Snapshot()
+  snap = e.Snapshot()
   got1, _ := e.GetCall(c1.SID)
   if got1.Status != model.CallInProgress { t.Fatal("expected in-progress") }
 

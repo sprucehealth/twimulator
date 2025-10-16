@@ -1,7 +1,6 @@
 package twilioapi
 
 import (
-	"fmt"
 	"time"
 
 	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
@@ -30,15 +29,9 @@ func (c *Client) ListAccount(params *twilioopenapi.ListAccountParams) ([]twilioo
 	return c.engine.ListAccount(params)
 }
 
-// CreateCallRequest represents the request to create a call
-type CreateCallRequest struct {
-	AccountSID       string // Required: SubAccount SID
-	From             string
-	To               string
-	URL              string // AnswerURL
-	StatusCallback   string
-	MachineDetection string
-	Timeout          int // in seconds
+// CreateCall creates a new call via the engine using Twilio's generated params
+func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error) {
+	return c.engine.CreateCall(params)
 }
 
 // CallResponse represents a Twilio-like call response
@@ -52,35 +45,6 @@ type CallResponse struct {
 	AnsweredTime  *time.Time `json:"answered_time,omitempty"`
 	EndTime       *time.Time `json:"end_time,omitempty"`
 	ParentCallSID *string    `json:"parent_call_sid,omitempty"`
-}
-
-// CreateCall creates a new call via the engine
-func (c *Client) CreateCall(req CreateCallRequest) (*CallResponse, error) {
-	if req.AccountSID == "" {
-		return nil, fmt.Errorf("AccountSID is required")
-	}
-
-	timeout := time.Duration(req.Timeout) * time.Second
-	if timeout == 0 {
-		timeout = 30 * time.Second
-	}
-
-	params := engine.CreateCallParams{
-		AccountSID:       model.SID(req.AccountSID),
-		From:             req.From,
-		To:               req.To,
-		AnswerURL:        req.URL,
-		StatusCallback:   req.StatusCallback,
-		MachineDetection: req.MachineDetection != "",
-		Timeout:          timeout,
-	}
-
-	call, err := c.engine.CreateCall(params)
-	if err != nil {
-		return nil, err
-	}
-
-	return c.callToResponse(call), nil
 }
 
 // GetCall retrieves a call by SID
