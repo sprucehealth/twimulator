@@ -47,13 +47,9 @@ type CallResponse struct {
 	ParentCallSID *string    `json:"parent_call_sid,omitempty"`
 }
 
-// GetCall retrieves a call by SID
-func (c *Client) GetCall(sid string) (*CallResponse, bool) {
-	call, exists := c.engine.GetCall(model.SID(sid))
-	if !exists {
-		return nil, false
-	}
-	return c.callToResponse(call), true
+// FetchCall retrieves a call via Twilio-compatible API
+func (c *Client) FetchCall(sid string, params *twilioopenapi.FetchCallParams) (*twilioopenapi.ApiV2010Call, error) {
+	return c.engine.FetchCall(sid, params)
 }
 
 // ListCalls lists all calls

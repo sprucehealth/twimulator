@@ -28,7 +28,7 @@ type Engine interface {
 	SendDigits(callSID model.SID, digits string) error
 
 	// Introspection
-	GetCall(callSID model.SID) (*model.Call, bool)
+	FetchCall(sid string, params *twilioopenapi.FetchCallParams) (*twilioopenapi.ApiV2010Call, error)
 	ListCalls(filter CallFilter) []*model.Call
 	GetQueue(accountSID model.SID, name string) (*model.Queue, bool)
 	GetConference(accountSID model.SID, name string) (*model.Conference, bool)
@@ -377,8 +377,19 @@ func (e *EngineImpl) SendDigits(callSID model.SID, digits string) error {
 	return nil
 }
 
-// GetCall retrieves a call by SID
-func (e *EngineImpl) GetCall(callSID model.SID) (*model.Call, bool) {
+// FetchCall returns a Twilio-style call response
+func (e *EngineImpl) FetchCall(sid string, _ *twilioopenapi.FetchCallParams) (*twilioopenapi.ApiV2010Call, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	call, exists := e.calls[model.SID(sid)]
+	if !exists {
+		return nil, fmt.Errorf("call %s not found", sid)
+	}
+	return buildAPICallResponse(call, e.apiVersion), nil
+}
+
+// GetCallState exposes the internal call model for inspection (tests, console)
+func (e *EngineImpl) GetCallState(callSID model.SID) (*model.Call, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	call, exists := e.calls[callSID]

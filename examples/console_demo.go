@@ -155,7 +155,7 @@ func main() {
 			log.Fatalf("CreateCall did not return SID")
 		}
 		sid := model.SID(*apiCall.Sid)
-		call, ok := e.GetCall(sid)
+		call, ok := e.GetCallState(sid)
 		if !ok {
 			log.Fatalf("Call %s not found after creation", sid)
 		}

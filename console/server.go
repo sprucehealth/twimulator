@@ -201,7 +201,8 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	call, exists := cs.engine.GetCall(model.SID(sid))
+	snap := cs.engine.Snapshot()
+	call, exists := snap.Calls[model.SID(sid)]
 	if !exists {
 		http.NotFound(w, r)
 		return

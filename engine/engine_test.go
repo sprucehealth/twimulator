@@ -58,7 +58,7 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	time.Sleep(10 * time.Millisecond) // Let goroutines process
 
 	// Verify call is in-progress
-	got1, ok := e.GetCall(c1.SID)
+	got1, ok := e.GetCallState(c1.SID)
 	if !ok {
 		t.Fatal("Call not found")
 	}
@@ -84,12 +84,12 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Both calls should be in progress
-	got1, _ = e.GetCall(c1.SID)
+	got1, _ = e.GetCallState(c1.SID)
 	if got1.Status != model.CallInProgress {
 		t.Fatalf("Expected c1 in-progress, got %s", got1.Status)
 	}
 
-	got2, _ := e.GetCall(c2.SID)
+	got2, _ := e.GetCallState(c2.SID)
 	if got2.Status != model.CallInProgress {
 		t.Fatalf("Expected c2 in-progress, got %s", got2.Status)
 	}
@@ -100,12 +100,12 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	e.Advance(1 * time.Second)
 
 	// Assert completed
-	got1, _ = e.GetCall(c1.SID)
+	got1, _ = e.GetCallState(c1.SID)
 	if got1.Status != model.CallCompleted {
 		t.Fatalf("Expected c1 completed, got %s", got1.Status)
 	}
 
-	got2, _ = e.GetCall(c2.SID)
+	got2, _ = e.GetCallState(c2.SID)
 	if got2.Status != model.CallCompleted {
 		t.Fatalf("Expected c2 completed, got %s", got2.Status)
 	}
@@ -174,7 +174,7 @@ func TestGatherWithDigits(t *testing.T) {
 	}
 
 	// Verify call completed after hangup
-	got, _ := e.GetCall(call.SID)
+	got, _ := e.GetCallState(call.SID)
 	if got.Status != model.CallCompleted {
 		t.Errorf("Expected completed, got %s", got.Status)
 	}
@@ -214,7 +214,7 @@ func TestGatherTimeout(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Should have timed out and hung up
-	got, _ := e.GetCall(call.SID)
+	got, _ := e.GetCallState(call.SID)
 	if got.Status != model.CallCompleted {
 		t.Errorf("Expected completed after timeout, got %s", got.Status)
 	}
@@ -272,7 +272,7 @@ func TestRedirect(t *testing.T) {
 		t.Error("Redirect was not followed")
 	}
 
-	got, _ := e.GetCall(call.SID)
+	got, _ := e.GetCallState(call.SID)
 	if got.Status != model.CallCompleted {
 		t.Errorf("Expected completed, got %s", got.Status)
 	}
@@ -373,7 +373,7 @@ func TestStatusCallbacks(t *testing.T) {
 	}
 
 	// Verify timeline has status callback events
-	got, _ := e.GetCall(call.SID)
+	got, _ := e.GetCallState(call.SID)
 	hasStatusCallback := false
 	for _, event := range got.Timeline {
 		if event.Type == "webhook.status_callback" {
@@ -412,7 +412,7 @@ func TestCallNoAnswer(t *testing.T) {
 	// In our current implementation, calls answer immediately
 	// To properly test no-answer, we'd need to modify the runner
 	// For now, verify call reached some end state
-	got, _ := e.GetCall(call.SID)
+	got, _ := e.GetCallState(call.SID)
 	if got.Status == model.CallQueued || got.Status == model.CallRinging {
 		t.Errorf("Call should have progressed past queued/ringing")
 	}
@@ -551,7 +551,7 @@ func mustCreateCall(t *testing.T, e *engine.EngineImpl, params *twilioopenapi.Cr
 		t.Fatal("create call did not return SID")
 	}
 	sid := model.SID(*apiCall.Sid)
-	call, ok := e.GetCall(sid)
+	call, ok := e.GetCallState(sid)
 	if !ok {
 		t.Fatalf("call %s not found after creation", sid)
 	}

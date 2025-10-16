@@ -122,7 +122,7 @@ type Engine interface {
   SendDigits(callSID model.SID, digits string) error // feeds <Gather>
 
   // Introspection
-  GetCall(callSID model.SID) (*model.Call, bool)
+  FetchCall(sid string, params *openapi.FetchCallParams) (*openapi.ApiV2010Call, error)
   ListCalls(filter CallFilter) []model.Call
   GetQueue(accountSID model.SID, name string) (*model.Queue, bool)  // Queues are scoped by subaccount
   GetConference(accountSID model.SID, name string) (*model.Conference, bool)  // Conferences are scoped by subaccount
@@ -144,6 +144,8 @@ type Engine interface {
 
 
 type CallFilter struct { To, From string; Status *model.CallStatus }
+
+// EngineImpl also exposes `GetCallState(callSID model.SID) (*model.Call, bool)` to aid in tests.
 
 // console/server.go
 type ConsoleServer struct {
@@ -256,7 +258,7 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
     SetTimeout(2)
   apiCall1, _ := e.CreateCall(params1)
   c1SID := model.SID(*apiCall1.Sid)
-  c1, _ := e.GetCall(c1SID)
+  c1, _ := e.GetCallState(c1SID)
 
   // Advance until answered and gather runs
   e.Advance(3 * time.Second)
@@ -268,11 +270,11 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
     SetTo("+180055502").
     SetUrl(testSrv.URL + "/voice/agent"))
   c2SID := model.SID(*apiCall2.Sid)
-  c2, _ := e.GetCall(c2SID)
+  c2, _ := e.GetCallState(c2SID)
   e.Advance(5 * time.Second)
 
   snap = e.Snapshot()
-  got1, _ := e.GetCall(c1.SID)
+  got1, _ := e.GetCallState(c1.SID)
   if got1.Status != model.CallInProgress { t.Fatal("expected in-progress") }
 
   // GetConference now requires accountSID to scope the lookup
@@ -288,7 +290,7 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
   e.Advance(1 * time.Second)
 
   // assert completed
-  got1, _ = e.GetCall(c1.SID)
+  got1, _ = e.GetCallState(c1.SID)
   if got1.Status != model.CallCompleted { t.Fatal("expected completed") }
 
   _ = snap // optionally marshal to JSON and compare golden
