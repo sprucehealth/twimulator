@@ -95,6 +95,7 @@ type SubAccount struct {
 	Status       string    `json:"status"` // "active", "suspended", "closed"
 	CreatedAt    time.Time `json:"created_at"`
 	AuthToken    string    `json:"auth_token"`
+	IncomingNumbers []string `json:"incoming_numbers"`
 }
 
 // SID generators with atomic counters for determinism
@@ -103,6 +104,7 @@ var (
 	conferenceCounter uint64
 	queueCounter      uint64
 	subAccountCounter uint64
+	phoneNumberCounter uint64
 )
 
 // NewCallSID generates a new Call SID (CA prefix)
@@ -136,6 +138,14 @@ func NewSubAccountSID() SID {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return SID(fmt.Sprintf("AC%08x%s", counter, hex.EncodeToString(b)[:8]))
+}
+
+// NewPhoneNumberSID generates a new Incoming Phone Number SID (PN prefix)
+func NewPhoneNumberSID() SID {
+	counter := atomic.AddUint64(&phoneNumberCounter, 1)
+	b := make([]byte, 4)
+	rand.Read(b)
+	return SID(fmt.Sprintf("PN%08x%s", counter, hex.EncodeToString(b)[:8]))
 }
 
 // NewAuthToken generates a pseudo-random auth token for subaccounts

@@ -28,6 +28,7 @@
                         <th>Friendly Name</th>
                         <th>Status</th>
                         <th>Created At</th>
+                        <th>Incoming Numbers</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -37,6 +38,13 @@
                         <td><strong>{{.FriendlyName}}</strong></td>
                         <td><span class="status status-{{.Status}}">{{.Status}}</span></td>
                         <td>{{.CreatedAt.Format "2006-01-02 15:04:05 MST"}}</td>
+                        <td>
+                            {{if .Numbers}}
+                                {{len .Numbers}}
+                            {{else}}
+                                0
+                            {{end}}
+                        </td>
                     </tr>
                     {{end}}
                 </tbody>

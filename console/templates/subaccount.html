@@ -36,6 +36,18 @@
                         <label>Created At</label>
                         <div>{{.SubAccount.CreatedAt.Format "2006-01-02 15:04:05 MST"}}</div>
                     </div>
+                    <div class="detail-item">
+                        <label>Incoming Numbers</label>
+                        <div class="number-list">
+                            {{if .SubAccount.Numbers}}
+                                {{range .SubAccount.Numbers}}
+                                    <span class="tag">{{.}}</span>
+                                {{end}}
+                            {{else}}
+                                <em>None</em>
+                            {{end}}
+                        </div>
+                    </div>
                 </div>
             </div>
 

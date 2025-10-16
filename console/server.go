@@ -35,6 +35,7 @@ type accountView struct {
 	Status       string
 	CreatedAt    time.Time
 	AuthToken    string
+	Numbers      []string
 }
 
 // NewConsoleServer creates a new console server
@@ -105,6 +106,13 @@ func (cs *ConsoleServer) handleSubAccounts(w http.ResponseWriter, r *http.Reques
 		views = append(views, toAccountView(acct))
 	}
 
+	snap := cs.engine.Snapshot()
+	for i := range views {
+		if sa, ok := snap.SubAccounts[model.SID(views[i].SID)]; ok {
+			views[i].Numbers = append([]string{}, sa.IncomingNumbers...)
+		}
+	}
+
 	sort.SliceStable(views, func(i, j int) bool {
 		if views[i].CreatedAt.Equal(views[j].CreatedAt) {
 			return views[i].SID < views[j].SID
@@ -150,6 +158,12 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 
 	accountModelSID := model.SID(accountSID)
 	snap := cs.engine.Snapshot()
+	subAccountModel, ok := snap.SubAccounts[accountModelSID]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	view.Numbers = append([]string{}, subAccountModel.IncomingNumbers...)
 
 	// Filter calls by AccountSID
 	calls := make([]*model.Call, 0)

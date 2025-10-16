@@ -142,6 +142,7 @@ type Engine interface {
 //   StatusCallback / StatusCallbackEvent
 //   Timeout (seconds)
 //   CallToken (optional)
+// Always provision `From` numbers first via `CreateIncomingPhoneNumber`.
 
 
 type CallFilter struct { To, From string; Status *model.CallStatus }
@@ -248,6 +249,21 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
   acct, _ := e.CreateAccount((&openapi.CreateAccountParams{}).SetFriendlyName("Test Account"))
   snap := e.Snapshot()
   subAccount := snap.SubAccounts[model.SID(*acct.Sid)]
+
+  mustCreateNumber := func(phone string) {
+    _, err := e.CreateIncomingPhoneNumber((&openapi.CreateIncomingPhoneNumberParams{}).
+      SetPathAccountSid(string(subAccount.SID)).
+      SetPhoneNumber(phone))
+    if err != nil { t.Fatalf("failed to provision number: %v", err) }
+  }
+
+  for _, phone := range []string{"+155512301", "+155512302", "+15551234099"} {
+    mustCreateNumber(phone)
+  }
+
+  for i := 1; i <= 3; i++ {
+    mustCreateNumber(fmt.Sprintf("+1555123400%d", i+2))
+  }
 
   // 1) Create first call; it answers and enqueues into "support"
   params1 := (&openapi.CreateCallParams{}).

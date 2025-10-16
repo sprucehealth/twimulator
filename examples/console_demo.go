@@ -38,6 +38,26 @@ func main() {
 	if !ok {
 		log.Fatalf("Subaccount %s not found after creation", subAccountSID)
 	}
+
+	provisionNumber := func(phone string) {
+		params := (&openapi.CreateIncomingPhoneNumberParams{}).
+			SetPathAccountSid(string(subAccountSID)).
+			SetPhoneNumber(phone)
+		if _, err := e.CreateIncomingPhoneNumber(params); err != nil {
+			log.Fatalf("Failed to provision number %s: %v", phone, err)
+		}
+	}
+
+	for _, phone := range []string{
+		"+15551234001",
+		"+15551234002",
+		"+15551234003",
+		"+15551234004",
+		"+15551234005",
+		"+15551234099",
+	} {
+		provisionNumber(phone)
+	}
 	log.Printf("Created subaccount: %s (%s)", subAccount.FriendlyName, subAccount.SID)
 
 	// Start a test HTTP server that serves TwiML

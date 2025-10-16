@@ -21,6 +21,7 @@ type Engine interface {
 	// Subaccount management
 	CreateAccount(params *twilioopenapi.CreateAccountParams) (*twilioopenapi.ApiV2010Account, error)
 	ListAccount(params *twilioopenapi.ListAccountParams) ([]twilioopenapi.ApiV2010Account, error)
+	CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncomingPhoneNumberParams) (*twilioopenapi.ApiV2010IncomingPhoneNumber, error)
 
 	// Core lifecycle
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
@@ -69,6 +70,7 @@ type EngineImpl struct {
 
 	// Subaccount management
 	subAccounts map[model.SID]*model.SubAccount
+	incomingNumbers map[model.SID]map[string]*incomingNumber
 
 	// Resources are scoped by subaccount SID
 	calls       map[model.SID]*model.Call                  // All calls across all subaccounts
@@ -84,6 +86,12 @@ type EngineImpl struct {
 
 // EngineOption configures the engine
 type EngineOption func(*EngineImpl)
+
+type incomingNumber struct {
+	SID         model.SID
+	PhoneNumber string
+	CreatedAt   time.Time
+}
 
 // WithManualClock configures the engine to use a manual clock
 func WithManualClock() EngineOption {
@@ -122,6 +130,7 @@ func NewEngine(opts ...EngineOption) *EngineImpl {
 		webhook:     httpstub.NewDefaultWebhookClient(10 * time.Second),
 		apiVersion:  "2010-04-01",
 		subAccounts: make(map[model.SID]*model.SubAccount),
+		incomingNumbers: make(map[model.SID]map[string]*incomingNumber),
 		calls:       make(map[model.SID]*model.Call),
 		queues:      make(map[model.SID]map[string]*model.Queue),
 		conferences: make(map[model.SID]map[string]*model.Conference),
@@ -164,6 +173,7 @@ func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*
 	// Initialize resource maps for this subaccount
 	e.queues[subAccount.SID] = make(map[string]*model.Queue)
 	e.conferences[subAccount.SID] = make(map[string]*model.Conference)
+	e.incomingNumbers[subAccount.SID] = make(map[string]*incomingNumber)
 
 	sidStr := string(sid)
 	authTokenCopy := authToken
@@ -250,6 +260,9 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 	if params.From != nil {
 		from = *params.From
 	}
+	if from == "" {
+		return nil, fmt.Errorf("From number is required")
+	}
 
 	to := ""
 	if params.To != nil {
@@ -283,6 +296,11 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 
 	if _, exists := e.subAccounts[accountSIDModel]; !exists {
 		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	numbers := e.incomingNumbers[accountSIDModel]
+	if numbers == nil || numbers[from] == nil {
+		return nil, fmt.Errorf("from number %s not provisioned for account %s", from, accountSID)
 	}
 
 	now := e.clock.Now()
@@ -335,6 +353,68 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 	}()
 
 	return buildAPICallResponse(call, e.apiVersion), nil
+}
+
+// CreateIncomingPhoneNumber provisions a phone number for an account
+func (e *EngineImpl) CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncomingPhoneNumberParams) (*twilioopenapi.ApiV2010IncomingPhoneNumber, error) {
+	if params == nil {
+		return nil, fmt.Errorf("params is required")
+	}
+
+	accountSID := ""
+	if params.PathAccountSid != nil {
+		accountSID = *params.PathAccountSid
+	}
+	if accountSID == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+
+	phone := ""
+	if params.PhoneNumber != nil {
+		phone = *params.PhoneNumber
+	}
+	if phone == "" {
+		return nil, fmt.Errorf("PhoneNumber is required")
+	}
+
+	accountSIDModel := model.SID(accountSID)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	subAccount, exists := e.subAccounts[accountSIDModel]
+	if !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	numbers := e.incomingNumbers[accountSIDModel]
+	if numbers == nil {
+		numbers = make(map[string]*incomingNumber)
+		e.incomingNumbers[accountSIDModel] = numbers
+	}
+	if _, exists := numbers[phone]; exists {
+		return nil, fmt.Errorf("phone number %s already exists", phone)
+	}
+
+	now := e.clock.Now()
+	sid := model.NewPhoneNumberSID()
+	record := &incomingNumber{
+		SID:         sid,
+		PhoneNumber: phone,
+		CreatedAt:   now,
+	}
+	numbers[phone] = record
+	subAccount.IncomingNumbers = append(subAccount.IncomingNumbers, phone)
+
+	phoneCopy := phone
+	sidStr := string(sid)
+	created := now.UTC().Format(time.RFC1123Z)
+
+	return &twilioopenapi.ApiV2010IncomingPhoneNumber{
+		Sid:         &sidStr,
+		PhoneNumber: &phoneCopy,
+		DateCreated: &created,
+	}, nil
 }
 
 // UpdateCall applies updates to an existing call (status, callback URL, etc.)
@@ -539,6 +619,9 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 
 	for sid, sa := range e.subAccounts {
 		saCopy := *sa
+		if sa.IncomingNumbers != nil {
+			saCopy.IncomingNumbers = append([]string{}, sa.IncomingNumbers...)
+		}
 		snap.SubAccounts[sid] = &saCopy
 	}
 

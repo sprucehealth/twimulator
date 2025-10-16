@@ -1,8 +1,10 @@
 package engine_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +45,15 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 
 	// Create a subaccount for testing
 	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1111", "+3333")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
+	mustProvisionNumbers(t, e, subAccount.SID, "+155512301", "+155512302", "+15551234099")
+
+	// Additional numbers for conference loop
+	for i := 1; i <= 3; i++ {
+		from := fmt.Sprintf("+1555123400%d", i+2)
+		mustProvisionNumbers(t, e, subAccount.SID, from)
+	}
 
 	// 1) Create first call; it answers and enqueues into "support"
 	params1 := newCreateCallParams(subAccount.SID, "+155512301", "+180055501", "http://test/voice/inbound")
@@ -152,6 +163,7 @@ func TestGatherWithDigits(t *testing.T) {
 	defer e.Close()
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
 
 	params := newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer")
 	call := mustCreateCall(t, e, params)
@@ -204,6 +216,7 @@ func TestGatherTimeout(t *testing.T) {
 	defer e.Close()
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
 
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
@@ -261,6 +274,7 @@ func TestRedirect(t *testing.T) {
 	defer e.Close()
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
 
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
@@ -295,6 +309,7 @@ func TestConference(t *testing.T) {
 	defer e.Close()
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1111", "+3333")
 
 	// Create two calls to join conference
 	call1 := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1111", "+2222", "http://test/answer"))
@@ -357,6 +372,7 @@ func TestStatusCallbacks(t *testing.T) {
 	defer e.Close()
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
 
 	params := newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer")
 	params.SetStatusCallback("http://test/status")
@@ -396,6 +412,7 @@ func TestCallNoAnswer(t *testing.T) {
 	defer e.Close()
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
 
 	params := newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer")
 	params.SetTimeout(int((2 * time.Second) / time.Second))
@@ -428,6 +445,7 @@ func TestListCallsFilter(t *testing.T) {
 	defer e.Close()
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1111", "+3333")
 
 	// Create multiple calls
 	mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1111", "+2222", "http://test/answer"))
@@ -558,11 +576,26 @@ func mustCreateCall(t *testing.T, e *engine.EngineImpl, params *twilioopenapi.Cr
 	return call
 }
 
+func mustProvisionNumbers(t *testing.T, e *engine.EngineImpl, accountSID model.SID, numbers ...string) {
+	t.Helper()
+	for _, num := range numbers {
+		params := (&twilioopenapi.CreateIncomingPhoneNumberParams{}).
+			SetPathAccountSid(string(accountSID)).
+			SetPhoneNumber(num)
+		if _, err := e.CreateIncomingPhoneNumber(params); err != nil {
+			if !strings.Contains(err.Error(), "already exists") {
+				t.Fatalf("failed to provision number %s: %v", num, err)
+			}
+		}
+	}
+}
+
 func TestUpdateCall(t *testing.T) {
 	e := engine.NewEngine(engine.WithManualClock())
 	defer e.Close()
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	updateParams := (&twilioopenapi.UpdateCallParams{}).
