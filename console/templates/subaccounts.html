@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twimulator Console - SubAccounts</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Twimulator Console</h1>
+            <nav>
+                <a href="/" class="active">SubAccounts</a>
+                <a href="/api/snapshot" target="_blank">API Snapshot</a>
+            </nav>
+        </header>
+
+        <main>
+            <h2>SubAccounts</h2>
+            <p class="subtitle">Select a subaccount to view its calls, queues, and conferences</p>
+
+            {{if .SubAccounts}}
+            <table>
+                <thead>
+                    <tr>
+                        <th>SID</th>
+                        <th>Friendly Name</th>
+                        <th>Status</th>
+                        <th>Created At</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .SubAccounts}}
+                    <tr>
+                        <td><a href="/subaccounts/{{.SID}}">{{.SID}}</a></td>
+                        <td><strong>{{.FriendlyName}}</strong></td>
+                        <td><span class="status status-{{.Status}}">{{.Status}}</span></td>
+                        <td>{{.CreatedAt.Format "2006-01-02 15:04:05 MST"}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty">No subaccounts yet. Create one via the API.</p>
+            {{end}}
+        </main>
+    </div>
+</body>
+</html>

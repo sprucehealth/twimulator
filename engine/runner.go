@@ -286,7 +286,7 @@ func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial) error {
 
 func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial) error {
 	r.engine.mu.Lock()
-	queue := r.engine.getOrCreateQueue(dial.Queue)
+	queue := r.engine.getOrCreateQueue(r.call.AccountSID, dial.Queue)
 
 	// Add this call to the queue
 	queue.Members = append(queue.Members, r.call.SID)
@@ -323,7 +323,7 @@ func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial) err
 
 func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial) error {
 	r.engine.mu.Lock()
-	conf := r.engine.getOrCreateConference(dial.Conference)
+	conf := r.engine.getOrCreateConference(r.call.AccountSID, dial.Conference)
 
 	// Add participant
 	conf.Participants = append(conf.Participants, r.call.SID)
@@ -457,7 +457,7 @@ func (r *CallRunner) buildCallForm() url.Values {
 
 	form := url.Values{}
 	form.Set("CallSid", string(r.call.SID))
-	form.Set("AccountSid", r.engine.accountSID)
+	form.Set("AccountSid", string(r.call.AccountSID))
 	form.Set("From", r.call.From)
 	form.Set("To", r.call.To)
 	form.Set("CallStatus", string(r.call.Status))

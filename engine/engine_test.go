@@ -39,8 +39,15 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	)
 	defer e.Close()
 
+	// Create a subaccount for testing
+	subAccount, err := e.CreateSubAccount("Test Account")
+	if err != nil {
+		t.Fatalf("Failed to create subaccount: %v", err)
+	}
+
 	// 1) Create first call; it answers and enqueues into "support"
 	c1, err := e.CreateCall(engine.CreateCallParams{
+		AccountSID:     subAccount.SID,
 		From:           "+155512301",
 		To:             "+180055501",
 		AnswerURL:      "http://test/voice/inbound",
@@ -68,7 +75,7 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	}
 
 	// Verify call is in the queue
-	queue, ok := e.GetQueue("support")
+	queue, ok := e.GetQueue(subAccount.SID, "support")
 	if !ok {
 		t.Fatal("Queue 'support' not found")
 	}
@@ -78,9 +85,10 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 
 	// 2) Create second call that dials the same queue
 	c2, err := e.CreateCall(engine.CreateCallParams{
-		From:      "+155512302",
-		To:        "+180055502",
-		AnswerURL: "http://test/voice/agent",
+		AccountSID: subAccount.SID,
+		From:       "+155512302",
+		To:         "+180055502",
+		AnswerURL:  "http://test/voice/agent",
 	})
 	if err != nil {
 		t.Fatalf("Failed to create second call: %v", err)
@@ -158,17 +166,24 @@ func TestGatherWithDigits(t *testing.T) {
 	)
 	defer e.Close()
 
+	subAccount, _ := e.CreateSubAccount("Test Account")
+
 	call, err := e.CreateCall(engine.CreateCallParams{
-		From:      "+1234",
-		To:        "+5678",
-		AnswerURL: "http://test/answer",
+		AccountSID: subAccount.SID,
+		From:       "+1234",
+		To:         "+5678",
+		AnswerURL:  "http://test/answer",
 	})
 	if err != nil {
 		t.Fatalf("Failed to create call: %v", err)
 	}
 
+	// Give goroutines time to start
+	time.Sleep(10 * time.Millisecond)
+
 	// Advance to answer
 	e.Advance(1 * time.Second)
+	time.Sleep(10 * time.Millisecond)
 
 	// Send digits while in gather
 	e.SendDigits(call.SID, "1")
@@ -210,14 +225,20 @@ func TestGatherTimeout(t *testing.T) {
 	)
 	defer e.Close()
 
+	subAccount, _ := e.CreateSubAccount("Test Account")
+
 	call, _ := e.CreateCall(engine.CreateCallParams{
-		From:      "+1234",
-		To:        "+5678",
-		AnswerURL: "http://test/answer",
+		AccountSID: subAccount.SID,
+		From:       "+1234",
+		To:         "+5678",
+		AnswerURL:  "http://test/answer",
 	})
+
+	time.Sleep(10 * time.Millisecond)
 
 	// Advance past gather timeout
 	e.Advance(5 * time.Second)
+	time.Sleep(10 * time.Millisecond)
 
 	// Should have timed out and hung up
 	got, _ := e.GetCall(call.SID)
@@ -266,13 +287,18 @@ func TestRedirect(t *testing.T) {
 	)
 	defer e.Close()
 
+	subAccount, _ := e.CreateSubAccount("Test Account")
+
 	call, _ := e.CreateCall(engine.CreateCallParams{
-		From:      "+1234",
-		To:        "+5678",
-		AnswerURL: "http://test/answer",
+		AccountSID: subAccount.SID,
+		From:       "+1234",
+		To:         "+5678",
+		AnswerURL:  "http://test/answer",
 	})
 
+	time.Sleep(10 * time.Millisecond)
 	e.Advance(2 * time.Second)
+	time.Sleep(10 * time.Millisecond)
 
 	if !redirectFollowed {
 		t.Error("Redirect was not followed")
@@ -300,23 +326,29 @@ func TestConference(t *testing.T) {
 	)
 	defer e.Close()
 
+	subAccount, _ := e.CreateSubAccount("Test Account")
+
 	// Create two calls to join conference
 	call1, _ := e.CreateCall(engine.CreateCallParams{
-		From:      "+1111",
-		To:        "+2222",
-		AnswerURL: "http://test/answer",
+		AccountSID: subAccount.SID,
+		From:       "+1111",
+		To:         "+2222",
+		AnswerURL:  "http://test/answer",
 	})
 
 	call2, _ := e.CreateCall(engine.CreateCallParams{
-		From:      "+3333",
-		To:        "+4444",
-		AnswerURL: "http://test/answer",
+		AccountSID: subAccount.SID,
+		From:       "+3333",
+		To:         "+4444",
+		AnswerURL:  "http://test/answer",
 	})
 
+	time.Sleep(10 * time.Millisecond)
 	e.Advance(2 * time.Second)
+	time.Sleep(10 * time.Millisecond)
 
 	// Both should be in conference
-	conf, ok := e.GetConference("test-room")
+	conf, ok := e.GetConference(subAccount.SID, "test-room")
 	if !ok {
 		t.Fatal("Conference not found")
 	}
@@ -332,8 +364,9 @@ func TestConference(t *testing.T) {
 	// Hangup one call
 	e.Hangup(call1.SID)
 	e.Advance(1 * time.Second)
+	time.Sleep(10 * time.Millisecond)
 
-	conf, _ = e.GetConference("test-room")
+	conf, _ = e.GetConference(subAccount.SID, "test-room")
 	if len(conf.Participants) != 1 {
 		t.Errorf("Expected 1 participant after hangup, got %d", len(conf.Participants))
 	}
@@ -341,8 +374,9 @@ func TestConference(t *testing.T) {
 	// Hangup last call
 	e.Hangup(call2.SID)
 	e.Advance(1 * time.Second)
+	time.Sleep(10 * time.Millisecond)
 
-	conf, _ = e.GetConference("test-room")
+	conf, _ = e.GetConference(subAccount.SID, "test-room")
 	if conf.Status != model.ConferenceCompleted {
 		t.Errorf("Expected completed, got %s", conf.Status)
 	}
@@ -365,14 +399,19 @@ func TestStatusCallbacks(t *testing.T) {
 	)
 	defer e.Close()
 
+	subAccount, _ := e.CreateSubAccount("Test Account")
+
 	call, _ := e.CreateCall(engine.CreateCallParams{
+		AccountSID:     subAccount.SID,
 		From:           "+1234",
 		To:             "+5678",
 		AnswerURL:      "http://test/answer",
 		StatusCallback: "http://test/status",
 	})
 
+	time.Sleep(10 * time.Millisecond)
 	e.Advance(2 * time.Second)
+	time.Sleep(10 * time.Millisecond)
 
 	// Check that status callbacks were made
 	statusCalls := mock.GetCallsTo("http://test/status")
@@ -403,17 +442,23 @@ func TestCallNoAnswer(t *testing.T) {
 	)
 	defer e.Close()
 
+	subAccount, _ := e.CreateSubAccount("Test Account")
+
 	call, _ := e.CreateCall(engine.CreateCallParams{
-		From:      "+1234",
-		To:        "+5678",
-		AnswerURL: "http://test/answer",
-		Timeout:   2 * time.Second,
+		AccountSID: subAccount.SID,
+		From:       "+1234",
+		To:         "+5678",
+		AnswerURL:  "http://test/answer",
+		Timeout:    2 * time.Second,
 	})
+
+	time.Sleep(10 * time.Millisecond)
 
 	// Advance past timeout without answering
 	// The call runner answers immediately (100ms), but we can test by
 	// advancing less than that and then past timeout
 	e.Advance(3 * time.Second)
+	time.Sleep(10 * time.Millisecond)
 
 	// In our current implementation, calls answer immediately
 	// To properly test no-answer, we'd need to modify the runner
@@ -433,23 +478,28 @@ func TestListCallsFilter(t *testing.T) {
 	)
 	defer e.Close()
 
+	subAccount, _ := e.CreateSubAccount("Test Account")
+
 	// Create multiple calls
 	e.CreateCall(engine.CreateCallParams{
-		From:      "+1111",
-		To:        "+2222",
-		AnswerURL: "http://test/answer",
+		AccountSID: subAccount.SID,
+		From:       "+1111",
+		To:         "+2222",
+		AnswerURL:  "http://test/answer",
 	})
 
 	e.CreateCall(engine.CreateCallParams{
-		From:      "+3333",
-		To:        "+2222",
-		AnswerURL: "http://test/answer",
+		AccountSID: subAccount.SID,
+		From:       "+3333",
+		To:         "+2222",
+		AnswerURL:  "http://test/answer",
 	})
 
 	e.CreateCall(engine.CreateCallParams{
-		From:      "+1111",
-		To:        "+4444",
-		AnswerURL: "http://test/answer",
+		AccountSID: subAccount.SID,
+		From:       "+1111",
+		To:         "+4444",
+		AnswerURL:  "http://test/answer",
 	})
 
 	// Filter by To

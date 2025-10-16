@@ -14,6 +14,11 @@ import (
 
 // Engine is the main interface for the Twilio Voice simulator
 type Engine interface {
+	// Subaccount management
+	CreateSubAccount(friendlyName string) (*model.SubAccount, error)
+	GetSubAccount(sid model.SID) (*model.SubAccount, bool)
+	ListSubAccounts() []*model.SubAccount
+
 	// Core lifecycle
 	CreateCall(params CreateCallParams) (*model.Call, error)
 	Hangup(callSID model.SID) error
@@ -22,8 +27,8 @@ type Engine interface {
 	// Introspection
 	GetCall(callSID model.SID) (*model.Call, bool)
 	ListCalls(filter CallFilter) []*model.Call
-	GetQueue(name string) (*model.Queue, bool)
-	GetConference(name string) (*model.Conference, bool)
+	GetQueue(accountSID model.SID, name string) (*model.Queue, bool)
+	GetConference(accountSID model.SID, name string) (*model.Conference, bool)
 	Snapshot() *StateSnapshot
 
 	// Time control
@@ -37,6 +42,7 @@ type Engine interface {
 
 // CreateCallParams defines parameters for creating a call
 type CreateCallParams struct {
+	AccountSID       model.SID // SubAccount SID (required)
 	From             string
 	To               string
 	AnswerURL        string
@@ -66,12 +72,15 @@ type EngineImpl struct {
 	mu          sync.RWMutex
 	clock       Clock
 	webhook     httpstub.WebhookClient
-	accountSID  string
 	apiVersion  string
 
-	calls       map[model.SID]*model.Call
-	queues      map[string]*model.Queue
-	conferences map[string]*model.Conference
+	// Subaccount management
+	subAccounts map[model.SID]*model.SubAccount
+
+	// Resources are scoped by subaccount SID
+	calls       map[model.SID]*model.Call       // All calls across all subaccounts
+	queues      map[model.SID]map[string]*model.Queue // subAccountSID -> queue name -> Queue
+	conferences map[model.SID]map[string]*model.Conference // subAccountSID -> conf name -> Conference
 
 	// Call runners
 	runners map[model.SID]*CallRunner
@@ -111,13 +120,6 @@ func WithWebhookClient(client httpstub.WebhookClient) EngineOption {
 	}
 }
 
-// WithAccountSID sets the account SID
-func WithAccountSID(sid string) EngineOption {
-	return func(e *EngineImpl) {
-		e.accountSID = sid
-	}
-}
-
 // NewEngine creates a new engine instance
 func NewEngine(opts ...EngineOption) *EngineImpl {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -125,11 +127,11 @@ func NewEngine(opts ...EngineOption) *EngineImpl {
 	e := &EngineImpl{
 		clock:       NewManualClock(time.Time{}), // default to manual
 		webhook:     httpstub.NewDefaultWebhookClient(10 * time.Second),
-		accountSID:  "AC00000000000000000000000000000000",
 		apiVersion:  "2010-04-01",
+		subAccounts: make(map[model.SID]*model.SubAccount),
 		calls:       make(map[model.SID]*model.Call),
-		queues:      make(map[string]*model.Queue),
-		conferences: make(map[string]*model.Conference),
+		queues:      make(map[model.SID]map[string]*model.Queue),
+		conferences: make(map[model.SID]map[string]*model.Conference),
 		runners:     make(map[model.SID]*CallRunner),
 		ctx:         ctx,
 		cancel:      cancel,
@@ -140,6 +142,47 @@ func NewEngine(opts ...EngineOption) *EngineImpl {
 	}
 
 	return e
+}
+
+// CreateSubAccount creates a new subaccount
+func (e *EngineImpl) CreateSubAccount(friendlyName string) (*model.SubAccount, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	subAccount := &model.SubAccount{
+		SID:          model.NewSubAccountSID(),
+		FriendlyName: friendlyName,
+		Status:       "active",
+		CreatedAt:    e.clock.Now(),
+	}
+
+	e.subAccounts[subAccount.SID] = subAccount
+
+	// Initialize resource maps for this subaccount
+	e.queues[subAccount.SID] = make(map[string]*model.Queue)
+	e.conferences[subAccount.SID] = make(map[string]*model.Conference)
+
+	return subAccount, nil
+}
+
+// GetSubAccount retrieves a subaccount by SID
+func (e *EngineImpl) GetSubAccount(sid model.SID) (*model.SubAccount, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	subAccount, exists := e.subAccounts[sid]
+	return subAccount, exists
+}
+
+// ListSubAccounts returns all subaccounts
+func (e *EngineImpl) ListSubAccounts() []*model.SubAccount {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	result := make([]*model.SubAccount, 0, len(e.subAccounts))
+	for _, sa := range e.subAccounts {
+		result = append(result, sa)
+	}
+	return result
 }
 
 // CreateCall initiates a new call
@@ -155,8 +198,18 @@ func (e *EngineImpl) CreateCall(params CreateCallParams) (*model.Call, error) {
 		return nil, fmt.Errorf("AnswerURL is required")
 	}
 
+	if params.AccountSID == "" {
+		return nil, fmt.Errorf("AccountSID is required")
+	}
+
+	// Validate subaccount exists
+	if _, exists := e.subAccounts[params.AccountSID]; !exists {
+		return nil, fmt.Errorf("subaccount %s not found", params.AccountSID)
+	}
+
 	call := &model.Call{
 		SID:            model.NewCallSID(),
+		AccountSID:     params.AccountSID,
 		From:           params.From,
 		To:             params.To,
 		Direction:      model.Outbound,
@@ -269,20 +322,26 @@ func (e *EngineImpl) ListCalls(filter CallFilter) []*model.Call {
 	return result
 }
 
-// GetQueue retrieves a queue by name
-func (e *EngineImpl) GetQueue(name string) (*model.Queue, bool) {
+// GetQueue retrieves a queue by name and subaccount
+func (e *EngineImpl) GetQueue(accountSID model.SID, name string) (*model.Queue, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	queue, exists := e.queues[name]
-	return queue, exists
+	if queues, exists := e.queues[accountSID]; exists {
+		queue, found := queues[name]
+		return queue, found
+	}
+	return nil, false
 }
 
-// GetConference retrieves a conference by name
-func (e *EngineImpl) GetConference(name string) (*model.Conference, bool) {
+// GetConference retrieves a conference by name and subaccount
+func (e *EngineImpl) GetConference(accountSID model.SID, name string) (*model.Conference, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	conf, exists := e.conferences[name]
-	return conf, exists
+	if confs, exists := e.conferences[accountSID]; exists {
+		conf, found := confs[name]
+		return conf, found
+	}
+	return nil, false
 }
 
 // Snapshot returns a deep copy of the current state
@@ -307,18 +366,24 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 		snap.Calls[sid] = &callCopy
 	}
 
-	for name, queue := range e.queues {
-		queueCopy := *queue
-		queueCopy.Members = append([]model.SID{}, queue.Members...)
-		queueCopy.Timeline = append([]model.Event{}, queue.Timeline...)
-		snap.Queues[name] = &queueCopy
+	// Flatten queues from all subaccounts into single map
+	for _, queues := range e.queues {
+		for name, queue := range queues {
+			queueCopy := *queue
+			queueCopy.Members = append([]model.SID{}, queue.Members...)
+			queueCopy.Timeline = append([]model.Event{}, queue.Timeline...)
+			snap.Queues[name] = &queueCopy
+		}
 	}
 
-	for name, conf := range e.conferences {
-		confCopy := *conf
-		confCopy.Participants = append([]model.SID{}, conf.Participants...)
-		confCopy.Timeline = append([]model.Event{}, conf.Timeline...)
-		snap.Conferences[name] = &confCopy
+	// Flatten conferences from all subaccounts into single map
+	for _, confs := range e.conferences {
+		for name, conf := range confs {
+			confCopy := *conf
+			confCopy.Participants = append([]model.SID{}, conf.Participants...)
+			confCopy.Timeline = append([]model.Event{}, conf.Timeline...)
+			snap.Conferences[name] = &confCopy
+		}
 	}
 
 	return snap
@@ -421,7 +486,7 @@ func (e *EngineImpl) sendStatusCallback(call *model.Call) {
 func (e *EngineImpl) buildCallbackForm(call *model.Call) url.Values {
 	form := url.Values{}
 	form.Set("CallSid", string(call.SID))
-	form.Set("AccountSid", e.accountSID)
+	form.Set("AccountSid", string(call.AccountSID))
 	form.Set("From", call.From)
 	form.Set("To", call.To)
 	form.Set("CallStatus", string(call.Status))
@@ -436,36 +501,48 @@ func (e *EngineImpl) buildCallbackForm(call *model.Call) url.Values {
 	return form
 }
 
-// getOrCreateQueue gets or creates a queue
-func (e *EngineImpl) getOrCreateQueue(name string) *model.Queue {
-	if queue, exists := e.queues[name]; exists {
+// getOrCreateQueue gets or creates a queue for a subaccount
+func (e *EngineImpl) getOrCreateQueue(accountSID model.SID, name string) *model.Queue {
+	// Ensure the subaccount map exists
+	if _, exists := e.queues[accountSID]; !exists {
+		e.queues[accountSID] = make(map[string]*model.Queue)
+	}
+
+	if queue, exists := e.queues[accountSID][name]; exists {
 		return queue
 	}
 
 	queue := &model.Queue{
-		Name:     name,
-		SID:      model.NewQueueSID(),
-		Members:  []model.SID{},
-		Timeline: []model.Event{},
+		Name:       name,
+		SID:        model.NewQueueSID(),
+		AccountSID: accountSID,
+		Members:    []model.SID{},
+		Timeline:   []model.Event{},
 	}
 	queue.Timeline = append(queue.Timeline, model.NewEvent(
 		e.clock.Now(),
 		"queue.created",
-		map[string]any{"name": name, "sid": queue.SID},
+		map[string]any{"name": name, "sid": queue.SID, "account_sid": accountSID},
 	))
-	e.queues[name] = queue
+	e.queues[accountSID][name] = queue
 	return queue
 }
 
-// getOrCreateConference gets or creates a conference
-func (e *EngineImpl) getOrCreateConference(name string) *model.Conference {
-	if conf, exists := e.conferences[name]; exists {
+// getOrCreateConference gets or creates a conference for a subaccount
+func (e *EngineImpl) getOrCreateConference(accountSID model.SID, name string) *model.Conference {
+	// Ensure the subaccount map exists
+	if _, exists := e.conferences[accountSID]; !exists {
+		e.conferences[accountSID] = make(map[string]*model.Conference)
+	}
+
+	if conf, exists := e.conferences[accountSID][name]; exists {
 		return conf
 	}
 
 	conf := &model.Conference{
 		Name:         name,
 		SID:          model.NewConferenceSID(),
+		AccountSID:   accountSID,
 		Participants: []model.SID{},
 		Status:       model.ConferenceCreated,
 		Timeline:     []model.Event{},
@@ -474,8 +551,8 @@ func (e *EngineImpl) getOrCreateConference(name string) *model.Conference {
 	conf.Timeline = append(conf.Timeline, model.NewEvent(
 		e.clock.Now(),
 		"conference.created",
-		map[string]any{"name": name, "sid": conf.SID},
+		map[string]any{"name": name, "sid": conf.SID, "account_sid": accountSID},
 	))
-	e.conferences[name] = conf
+	e.conferences[accountSID][name] = conf
 	return conf
 }

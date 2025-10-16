@@ -245,3 +245,40 @@ code {
     font-family: 'Courier New', monospace;
     font-size: 13px;
 }
+
+.subtitle {
+    color: #666;
+    font-size: 14px;
+    margin-bottom: 20px;
+}
+
+.subaccount-header {
+    margin-bottom: 30px;
+    padding-bottom: 20px;
+    border-bottom: 2px solid #f0f0f0;
+}
+
+.resource-section {
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 1px solid #f0f0f0;
+}
+
+.resource-section:first-of-type {
+    border-top: none;
+}
+
+.status-active {
+    background: #e5f7ed;
+    color: #1e7e34;
+}
+
+.status-suspended {
+    background: #fff4e5;
+    color: #a67c00;
+}
+
+.status-closed {
+    background: #e3e8f0;
+    color: #5a6987;
+}

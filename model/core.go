@@ -44,6 +44,7 @@ const (
 // Call represents a voice call
 type Call struct {
 	SID             SID               `json:"sid"`
+	AccountSID      SID               `json:"account_sid"`
 	From            string            `json:"from"`
 	To              string            `json:"to"`
 	Direction       Direction         `json:"direction"`
@@ -61,16 +62,18 @@ type Call struct {
 
 // Queue represents a call queue
 type Queue struct {
-	Name     string  `json:"name"`
-	SID      SID     `json:"sid"`
-	Members  []SID   `json:"members"`  // Call SIDs in queue
-	Timeline []Event `json:"timeline"`
+	Name       string  `json:"name"`
+	SID        SID     `json:"sid"`
+	AccountSID SID     `json:"account_sid"`
+	Members    []SID   `json:"members"`  // Call SIDs in queue
+	Timeline   []Event `json:"timeline"`
 }
 
 // Conference represents a conference room
 type Conference struct {
 	Name         string           `json:"name"`
 	SID          SID              `json:"sid"`
+	AccountSID   SID              `json:"account_sid"`
 	Participants []SID            `json:"participants"` // Call SIDs in conference
 	Status       ConferenceStatus `json:"status"`
 	Timeline     []Event          `json:"timeline"`
@@ -85,11 +88,20 @@ type Event struct {
 	Detail map[string]any `json:"detail"`
 }
 
+// SubAccount represents a Twilio subaccount
+type SubAccount struct {
+	SID         SID       `json:"sid"`
+	FriendlyName string   `json:"friendly_name"`
+	Status      string    `json:"status"` // "active", "suspended", "closed"
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 // SID generators with atomic counters for determinism
 var (
-	callCounter      uint64
+	callCounter       uint64
 	conferenceCounter uint64
-	queueCounter     uint64
+	queueCounter      uint64
+	subAccountCounter uint64
 )
 
 // NewCallSID generates a new Call SID (CA prefix)
@@ -115,6 +127,14 @@ func NewQueueSID() SID {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return SID(fmt.Sprintf("QU%08x%s", counter, hex.EncodeToString(b)[:8]))
+}
+
+// NewSubAccountSID generates a new SubAccount SID (AC prefix)
+func NewSubAccountSID() SID {
+	counter := atomic.AddUint64(&subAccountCounter, 1)
+	b := make([]byte, 4)
+	rand.Read(b)
+	return SID(fmt.Sprintf("AC%08x%s", counter, hex.EncodeToString(b)[:8]))
 }
 
 // NewEvent creates a new timeline event

@@ -11,16 +11,16 @@
         <header>
             <h1>Twimulator Console</h1>
             <nav>
-                <a href="/">Calls</a>
-                <a href="/queues">Queues</a>
-                <a href="/conferences">Conferences</a>
+                <a href="/">SubAccounts</a>
                 <a href="/api/snapshot" target="_blank">API Snapshot</a>
             </nav>
         </header>
 
         <main>
             <div class="breadcrumb">
-                <a href="/">Calls</a> &raquo; {{.Call.SID}}
+                <a href="/">SubAccounts</a> &raquo;
+                <a href="/subaccounts/{{.Call.AccountSID}}">{{.Call.AccountSID}}</a> &raquo;
+                {{.Call.SID}}
             </div>
 
             <h2>Call Details</h2>
@@ -29,6 +29,10 @@
                 <div class="detail-item">
                     <label>SID</label>
                     <div>{{.Call.SID}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Account SID</label>
+                    <div><a href="/subaccounts/{{.Call.AccountSID}}">{{.Call.AccountSID}}</a></div>
                 </div>
                 <div class="detail-item">
                     <label>Status</label>

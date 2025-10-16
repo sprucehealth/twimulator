@@ -43,7 +43,7 @@ twivoice/                 // module root
 
 ```go
 // model/core.go
-type SID string // e.g., "CAxxxxxxxx", "CFxxxxxxxx", "QUxxxxxxxx"
+type SID string // e.g., "CAxxxxxxxx", "CFxxxxxxxx", "QUxxxxxxxx", "ACxxxxxxxx"
 type CallStatus string
 const (
   CallQueued CallStatus = "queued"
@@ -58,8 +58,17 @@ const (
 type Direction string
 const (Inbound Direction = "inbound"; Outbound Direction = "outbound")
 
+// SubAccount represents a Twilio subaccount (all resources are scoped to a subaccount)
+type SubAccount struct {
+  SID          SID
+  FriendlyName string
+  Status       string // "active", "suspended", "closed"
+  CreatedAt    time.Time
+}
+
 type Call struct {
   SID            SID
+  AccountSID     SID    // SubAccount that owns this call
   From, To       string
   Direction      Direction
   Status         CallStatus
@@ -73,16 +82,18 @@ type Call struct {
 type Queue struct {
   Name       string
   SID        SID
-  Members    []SID // Call SIDs
+  AccountSID SID    // SubAccount that owns this queue
+  Members    []SID  // Call SIDs
   Timeline   []Event
 }
 
 type Conference struct {
-  Name       string
-  SID        SID
-  Participants []SID // Call SIDs
-  Status     string // "created","in-progress","completed"
-  Timeline   []Event
+  Name         string
+  SID          SID
+  AccountSID   SID    // SubAccount that owns this conference
+  Participants []SID  // Call SIDs
+  Status       string // "created","in-progress","completed"
+  Timeline     []Event
 }
 
 type Event struct {
@@ -101,6 +112,11 @@ type Clock interface {
 }
 
 type Engine interface {
+  // SubAccount management
+  CreateSubAccount(friendlyName string) (*model.SubAccount, error)
+  GetSubAccount(sid model.SID) (*model.SubAccount, bool)
+  ListSubAccounts() []*model.SubAccount
+
   // Core lifecycle
   CreateCall(params CreateCallParams) (*model.Call, error)
   Hangup(callSID model.SID) error
@@ -109,8 +125,8 @@ type Engine interface {
   // Introspection
   GetCall(callSID model.SID) (*model.Call, bool)
   ListCalls(filter CallFilter) []model.Call
-  GetQueue(name string) (*model.Queue, bool)
-  GetConference(name string) (*model.Conference, bool)
+  GetQueue(accountSID model.SID, name string) (*model.Queue, bool)  // Queues are scoped by subaccount
+  GetConference(accountSID model.SID, name string) (*model.Conference, bool)  // Conferences are scoped by subaccount
   Snapshot() StateSnapshot // JSON-serializable
 
   // Scheduling/time
@@ -119,6 +135,7 @@ type Engine interface {
 }
 
 type CreateCallParams struct {
+  AccountSID     model.SID // Required: SubAccount SID that owns this call
   From, To       string
   AnswerURL      string  // like Twilio's 'url' param
   StatusCallback string  // optional
@@ -225,8 +242,12 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
   e := engine.NewEngine(engine.WithManualClock(), engine.WithConsoleDisabled())
   // our app is running locally on httptest.Server; AnswerURL points to it.
 
+  // Create a subaccount for this test
+  subAccount, _ := e.CreateSubAccount("Test Account")
+
   // 1) Create first call; it answers and enqueues into "support"
   c1, _ := e.CreateCall(engine.CreateCallParams{
+    AccountSID: subAccount.SID,  // All calls require AccountSID
     From: "+155512301", To: "+180055501",
     AnswerURL: testSrv.URL + "/voice/inbound",
     StatusCallback: testSrv.URL + "/voice/status",
@@ -238,6 +259,7 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
 
   // 2) Create second call that dials the same queue -> bridges to conference
   c2, _ := e.CreateCall(engine.CreateCallParams{
+    AccountSID: subAccount.SID,  // Same subaccount - queues are scoped per subaccount
     From: "+155512302", To: "+180055502",
     AnswerURL: testSrv.URL + "/voice/agent",
   })
@@ -247,7 +269,8 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
   got1, _ := e.GetCall(c1.SID)
   if got1.Status != model.CallInProgress { t.Fatal("expected in-progress") }
 
-  conf, _ := e.GetConference("support-room")
+  // GetConference now requires accountSID to scope the lookup
+  conf, _ := e.GetConference(subAccount.SID, "support-room")
   if len(conf.Participants) != 2 { t.Fatalf("expected 2 participants") }
 
   // simulate DTMF to exit gather if needed
@@ -307,11 +330,25 @@ Library should wait for `SendDigits` or timeout; then POST `Digits` to `action`.
 * **Queue**: on `Enqueue`/`Dial Queue`, add caller to queue; on a matching `Dial Queue` from another call, bridge both into a **Conference** named after the queue or given name.
 * **Conference**: `created` on first participant, `in-progress` when two or more, `completed` when last leaves.
 
+## SubAccount Architecture
+
+**IMPLEMENTED**: Following Twilio's real architecture, all resources are scoped to SubAccounts:
+
+* **SubAccounts** (`AC` prefix): Container for all resources. Created via `engine.CreateSubAccount(friendlyName)`.
+* **Resource Scoping**:
+  * Each `Call`, `Queue`, and `Conference` has an `AccountSID` field
+  * Queues and conferences are stored in nested maps: `map[AccountSID]map[name]*Resource`
+  * Two different subaccounts can have queues/conferences with the same name without conflict
+* **API Requirements**:
+  * `CreateCall` requires `AccountSID` parameter (validated to exist)
+  * `GetQueue/GetConference` require both `accountSID` and `name` parameters
+* **Multi-Tenancy**: Enables testing of multi-tenant applications where different customers/organizations are isolated
+
 ## API parity notes
 
-* Don’t chase 1:1 Twilio parity. Be consistent and **document** our fields.
-* SIDs can be short pseudo-random strings with prefixes: `CA` (call), `CF` (conference), `QU` (queue).
-* Provide helpers to set fake `AccountSid`.
+* Don't chase 1:1 Twilio parity. Be consistent and **document** our fields.
+* SIDs can be short pseudo-random strings with prefixes: `CA` (call), `CF` (conference), `QU` (queue), `AC` (subaccount).
+* SubAccount support matches Twilio's actual architecture for proper testing of multi-tenant scenarios.
 
 ## Deliverables
 

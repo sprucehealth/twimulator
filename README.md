@@ -6,6 +6,7 @@ Think of it as a **TwiML executor + webhook driver** that mimics the parts of Tw
 
 ## Features
 
+- **SubAccount Scoping**: Full support for Twilio-style subaccounts - all resources (calls, queues, conferences) are scoped to subaccounts
 - **TwiML Execution**: Simulates `<Say>`, `<Play>`, `<Pause>`, `<Gather>`, `<Dial>`, `<Enqueue>`, `<Conference>`, `<Redirect>`, and `<Hangup>`
 - **Webhook Integration**: Automatically POSTs to your app's answer URLs and status callbacks with Twilio-like parameters
 - **State Inspection**: Export full state as JSON for assertions (calls, queues, conferences, timelines)
@@ -36,12 +37,16 @@ func main() {
 	e := engine.NewEngine(engine.WithManualClock())
 	defer e.Close()
 
+	// Create a subaccount (required for all calls)
+	subAccount, _ := e.CreateSubAccount("Test Account")
+
 	// Create a call
 	call, _ := e.CreateCall(engine.CreateCallParams{
-		From:      "+15551234567",
-		To:        "+18005551234",
-		AnswerURL: "http://localhost:8080/voice",
-		Timeout:   30 * time.Second,
+		AccountSID: subAccount.SID,
+		From:       "+15551234567",
+		To:         "+18005551234",
+		AnswerURL:  "http://localhost:8080/voice",
+		Timeout:    30 * time.Second,
 	})
 
 	// Advance time to trigger call execution
@@ -176,6 +181,45 @@ Ends the call immediately.
 <Hangup/>
 ```
 
+## SubAccounts
+
+Like Twilio, all resources in Twimulator are scoped to subaccounts. This allows multi-tenant testing and proper resource isolation.
+
+### Creating SubAccounts
+
+```go
+// Create a subaccount
+subAccount, err := engine.CreateSubAccount("Production Account")
+if err != nil {
+    log.Fatal(err)
+}
+
+// All calls must specify the AccountSID
+call, err := engine.CreateCall(engine.CreateCallParams{
+    AccountSID: subAccount.SID,
+    From:       "+15551234567",
+    To:         "+18005551234",
+    AnswerURL:  "http://example.com/voice",
+})
+```
+
+### SubAccount Scoping
+
+- **Calls**: Each call belongs to exactly one subaccount
+- **Queues**: Queue names are scoped per subaccount (two subaccounts can have queues with the same name)
+- **Conferences**: Conference names are scoped per subaccount
+- **Isolation**: Resources from different subaccounts never interact
+
+### Listing SubAccounts
+
+```go
+// List all subaccounts
+subAccounts := engine.ListSubAccounts()
+for _, sa := range subAccounts {
+    fmt.Printf("SubAccount: %s (%s)\n", sa.FriendlyName, sa.SID)
+}
+```
+
 ## Call Status Lifecycle
 
 Calls progress through states similar to Twilio:
@@ -254,7 +298,7 @@ for name, conf := range snap.Conferences {
 
 ## Web Console
 
-The optional console provides a Twilio-like UI for browsing calls, queues, and conferences.
+The optional console provides a Twilio-like UI for browsing subaccounts and their resources.
 
 ```go
 import "twimulator/console"
@@ -269,11 +313,20 @@ go cs.Start()
 ```
 
 Features:
-- Call list with status, timeline
-- Individual call details with TwiML execution log
-- Webhook request/response inspection
-- Queue and conference listings
-- JSON snapshot endpoint at `/api/snapshot`
+- **SubAccount List** - Landing page showing all subaccounts
+- **SubAccount Detail** - Drill down into a specific subaccount to view:
+  - All calls scoped to that subaccount
+  - All queues scoped to that subaccount
+  - All conferences scoped to that subaccount
+- **Call Details** - Individual call timeline with TwiML execution log and webhook inspection
+- **Resource Scoping** - All resources properly filtered by subaccount
+- **JSON snapshot endpoint** at `/api/snapshot`
+
+Console URLs:
+- `/` - SubAccount list (landing page)
+- `/subaccounts/{accountSID}` - SubAccount detail with all resources
+- `/calls/{callSID}` - Individual call details
+- `/api/snapshot` - JSON dump of entire engine state
 
 ## Example: Queue + Conference Flow
 

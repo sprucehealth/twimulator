@@ -20,6 +20,13 @@ func main() {
 	e := engine.NewEngine(engine.WithAutoClock())
 	defer e.Close()
 
+	// Create a subaccount for our demo
+	subAccount, err := e.CreateSubAccount("Demo SubAccount")
+	if err != nil {
+		log.Fatalf("Failed to create subaccount: %v", err)
+	}
+	log.Printf("Created subaccount: %s (%s)", subAccount.FriendlyName, subAccount.SID)
+
 	// Start a test HTTP server that serves TwiML
 	mux := http.NewServeMux()
 
@@ -132,6 +139,7 @@ func main() {
 
 		log.Println("1. Creating inbound customer call...")
 		call1, _ := e.CreateCall(engine.CreateCallParams{
+			AccountSID:     subAccount.SID,
 			From:           "+15551234001",
 			To:             "+18005551000",
 			AnswerURL:      testSrv.URL + "/voice/inbound",
@@ -143,9 +151,10 @@ func main() {
 
 		log.Println("2. Creating agent call to handle queue...")
 		call2, _ := e.CreateCall(engine.CreateCallParams{
-			From:      "+15551234002",
-			To:        "+18005551001",
-			AnswerURL: testSrv.URL + "/voice/agent",
+			AccountSID: subAccount.SID,
+			From:       "+15551234002",
+			To:         "+18005551001",
+			AnswerURL:  testSrv.URL + "/voice/agent",
 		})
 		log.Printf("   Created call %s\n", call2.SID)
 
@@ -155,9 +164,10 @@ func main() {
 		for i := 1; i <= 3; i++ {
 			from := fmt.Sprintf("+1555123400%d", i+2)
 			call, _ := e.CreateCall(engine.CreateCallParams{
-				From:      from,
-				To:        "+18005551002",
-				AnswerURL: testSrv.URL + "/voice/conference",
+				AccountSID: subAccount.SID,
+				From:       from,
+				To:         "+18005551002",
+				AnswerURL:  testSrv.URL + "/voice/conference",
 			})
 			log.Printf("   Created conference call %s\n", call.SID)
 			time.Sleep(500 * time.Millisecond)
@@ -167,9 +177,10 @@ func main() {
 
 		log.Println("4. Creating gather demo call...")
 		call3, _ := e.CreateCall(engine.CreateCallParams{
-			From:      "+15551234099",
-			To:        "+18005551003",
-			AnswerURL: testSrv.URL + "/voice/gather",
+			AccountSID: subAccount.SID,
+			From:       "+15551234099",
+			To:         "+18005551003",
+			AnswerURL:  testSrv.URL + "/voice/gather",
 		})
 		log.Printf("   Created call %s\n", call3.SID)
 

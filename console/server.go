@@ -51,10 +51,9 @@ func NewConsoleServer(e engine.Engine, addr string) (*ConsoleServer, error) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", cs.handleIndex)
+	mux.HandleFunc("/", cs.handleSubAccounts)
+	mux.HandleFunc("/subaccounts/", cs.handleSubAccountDetail)
 	mux.HandleFunc("/calls/", cs.handleCallDetail)
-	mux.HandleFunc("/queues", cs.handleQueues)
-	mux.HandleFunc("/conferences", cs.handleConferences)
 	mux.HandleFunc("/api/snapshot", cs.handleSnapshot)
 	mux.Handle("/static/", http.FileServer(http.FS(content)))
 
@@ -77,26 +76,71 @@ func (cs *ConsoleServer) Stop(ctx context.Context) error {
 	return cs.server.Shutdown(ctx)
 }
 
-func (cs *ConsoleServer) handleIndex(w http.ResponseWriter, r *http.Request) {
+func (cs *ConsoleServer) handleSubAccounts(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	subAccounts := cs.engine.ListSubAccounts()
+
+	data := map[string]any{
+		"SubAccounts": subAccounts,
+	}
+
+	if err := cs.tmpl.ExecuteTemplate(w, "subaccounts.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.Request) {
+	accountSID := strings.TrimPrefix(r.URL.Path, "/subaccounts/")
+	if accountSID == "" {
+		http.Error(w, "SubAccount SID required", http.StatusBadRequest)
+		return
+	}
+
+	subAccount, exists := cs.engine.GetSubAccount(model.SID(accountSID))
+	if !exists {
 		http.NotFound(w, r)
 		return
 	}
 
 	snap := cs.engine.Snapshot()
 
-	// Convert to slice for sorting
-	calls := make([]*model.Call, 0, len(snap.Calls))
+	// Filter calls by AccountSID
+	calls := make([]*model.Call, 0)
 	for _, call := range snap.Calls {
-		calls = append(calls, call)
+		if call.AccountSID == subAccount.SID {
+			calls = append(calls, call)
+		}
+	}
+
+	// Filter queues by AccountSID
+	queues := make([]*model.Queue, 0)
+	for _, queue := range snap.Queues {
+		if queue.AccountSID == subAccount.SID {
+			queues = append(queues, queue)
+		}
+	}
+
+	// Filter conferences by AccountSID
+	conferences := make([]*model.Conference, 0)
+	for _, conf := range snap.Conferences {
+		if conf.AccountSID == subAccount.SID {
+			conferences = append(conferences, conf)
+		}
 	}
 
 	data := map[string]any{
-		"Calls":     calls,
-		"Timestamp": snap.Timestamp,
+		"SubAccount":  subAccount,
+		"Calls":       calls,
+		"Queues":      queues,
+		"Conferences": conferences,
+		"Timestamp":   snap.Timestamp,
 	}
 
-	if err := cs.tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
+	if err := cs.tmpl.ExecuteTemplate(w, "subaccount.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -119,40 +163,6 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := cs.tmpl.ExecuteTemplate(w, "call.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
-func (cs *ConsoleServer) handleQueues(w http.ResponseWriter, r *http.Request) {
-	snap := cs.engine.Snapshot()
-
-	queues := make([]*model.Queue, 0, len(snap.Queues))
-	for _, q := range snap.Queues {
-		queues = append(queues, q)
-	}
-
-	data := map[string]any{
-		"Queues": queues,
-	}
-
-	if err := cs.tmpl.ExecuteTemplate(w, "queues.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
-func (cs *ConsoleServer) handleConferences(w http.ResponseWriter, r *http.Request) {
-	snap := cs.engine.Snapshot()
-
-	conferences := make([]*model.Conference, 0, len(snap.Conferences))
-	for _, c := range snap.Conferences {
-		conferences = append(conferences, c)
-	}
-
-	data := map[string]any{
-		"Conferences": conferences,
-	}
-
-	if err := cs.tmpl.ExecuteTemplate(w, "conferences.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
