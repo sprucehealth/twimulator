@@ -68,7 +68,8 @@
                             <td>{{.StartAt.Format "15:04:05"}}</td>
                             <td>
                                 {{if .EndedAt}}
-                                    {{printf "%.1fs" .EndedAt.Sub .StartAt.Seconds}}
+                                    {{$duration := .EndedAt.Sub .StartAt}}
+                                    {{printf "%.1fs" $duration.Seconds}}
                                 {{else if .AnsweredAt}}
                                     ongoing
                                 {{else}}

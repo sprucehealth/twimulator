@@ -11,8 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
+
 	"twimulator/console"
 	"twimulator/engine"
+	"twimulator/model"
 )
 
 func main() {
@@ -21,9 +24,18 @@ func main() {
 	defer e.Close()
 
 	// Create a subaccount for our demo
-	subAccount, err := e.CreateSubAccount("Demo SubAccount")
+	accountParams := (&twilioopenapi.CreateAccountParams{}).SetFriendlyName("Demo SubAccount")
+	account, err := e.CreateAccount(accountParams)
 	if err != nil {
 		log.Fatalf("Failed to create subaccount: %v", err)
+	}
+	if account.Sid == nil {
+		log.Fatalf("CreateAccount returned no SID")
+	}
+	subAccountSID := model.SID(*account.Sid)
+	subAccount, ok := e.GetSubAccount(subAccountSID)
+	if !ok {
+		log.Fatalf("Subaccount %s not found after creation", subAccountSID)
 	}
 	log.Printf("Created subaccount: %s (%s)", subAccount.FriendlyName, subAccount.SID)
 

@@ -65,7 +65,7 @@ type Queue struct {
 	Name       string  `json:"name"`
 	SID        SID     `json:"sid"`
 	AccountSID SID     `json:"account_sid"`
-	Members    []SID   `json:"members"`  // Call SIDs in queue
+	Members    []SID   `json:"members"` // Call SIDs in queue
 	Timeline   []Event `json:"timeline"`
 }
 
@@ -90,10 +90,11 @@ type Event struct {
 
 // SubAccount represents a Twilio subaccount
 type SubAccount struct {
-	SID         SID       `json:"sid"`
-	FriendlyName string   `json:"friendly_name"`
-	Status      string    `json:"status"` // "active", "suspended", "closed"
-	CreatedAt   time.Time `json:"created_at"`
+	SID          SID       `json:"sid"`
+	FriendlyName string    `json:"friendly_name"`
+	Status       string    `json:"status"` // "active", "suspended", "closed"
+	CreatedAt    time.Time `json:"created_at"`
+	AuthToken    string    `json:"auth_token"`
 }
 
 // SID generators with atomic counters for determinism
@@ -135,6 +136,13 @@ func NewSubAccountSID() SID {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return SID(fmt.Sprintf("AC%08x%s", counter, hex.EncodeToString(b)[:8]))
+}
+
+// NewAuthToken generates a pseudo-random auth token for subaccounts
+func NewAuthToken() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // NewEvent creates a new timeline event

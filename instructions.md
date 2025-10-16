@@ -113,7 +113,7 @@ type Clock interface {
 
 type Engine interface {
   // SubAccount management
-  CreateSubAccount(friendlyName string) (*model.SubAccount, error)
+  CreateAccount(params *openapi.CreateAccountParams) (*openapi.ApiV2010Account, error)
   GetSubAccount(sid model.SID) (*model.SubAccount, bool)
   ListSubAccounts() []*model.SubAccount
 
@@ -243,7 +243,8 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
   // our app is running locally on httptest.Server; AnswerURL points to it.
 
   // Create a subaccount for this test
-  subAccount, _ := e.CreateSubAccount("Test Account")
+  acct, _ := e.CreateAccount((&openapi.CreateAccountParams{}).SetFriendlyName("Test Account"))
+  subAccount, _ := e.GetSubAccount(model.SID(*acct.Sid))
 
   // 1) Create first call; it answers and enqueues into "support"
   c1, _ := e.CreateCall(engine.CreateCallParams{
@@ -334,7 +335,7 @@ Library should wait for `SendDigits` or timeout; then POST `Digits` to `action`.
 
 **IMPLEMENTED**: Following Twilio's real architecture, all resources are scoped to SubAccounts:
 
-* **SubAccounts** (`AC` prefix): Container for all resources. Created via `engine.CreateSubAccount(friendlyName)`.
+* **SubAccounts** (`AC` prefix): Container for all resources. Created via `engine.CreateAccount(params)` returning a Twilio `ApiV2010Account` (then look up the internal `SubAccount` if needed).
 * **Resource Scoping**:
   * Each `Call`, `Queue`, and `Conference` has an `AccountSID` field
   * Queues and conferences are stored in nested maps: `map[AccountSID]map[name]*Resource`

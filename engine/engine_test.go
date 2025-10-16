@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
+
 	"twimulator/engine"
 	"twimulator/httpstub"
 	"twimulator/model"
@@ -40,10 +42,7 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	defer e.Close()
 
 	// Create a subaccount for testing
-	subAccount, err := e.CreateSubAccount("Test Account")
-	if err != nil {
-		t.Fatalf("Failed to create subaccount: %v", err)
-	}
+	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	// 1) Create first call; it answers and enqueues into "support"
 	c1, err := e.CreateCall(engine.CreateCallParams{
@@ -166,7 +165,7 @@ func TestGatherWithDigits(t *testing.T) {
 	)
 	defer e.Close()
 
-	subAccount, _ := e.CreateSubAccount("Test Account")
+	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	call, err := e.CreateCall(engine.CreateCallParams{
 		AccountSID: subAccount.SID,
@@ -225,7 +224,7 @@ func TestGatherTimeout(t *testing.T) {
 	)
 	defer e.Close()
 
-	subAccount, _ := e.CreateSubAccount("Test Account")
+	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	call, _ := e.CreateCall(engine.CreateCallParams{
 		AccountSID: subAccount.SID,
@@ -287,7 +286,7 @@ func TestRedirect(t *testing.T) {
 	)
 	defer e.Close()
 
-	subAccount, _ := e.CreateSubAccount("Test Account")
+	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	call, _ := e.CreateCall(engine.CreateCallParams{
 		AccountSID: subAccount.SID,
@@ -326,7 +325,7 @@ func TestConference(t *testing.T) {
 	)
 	defer e.Close()
 
-	subAccount, _ := e.CreateSubAccount("Test Account")
+	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	// Create two calls to join conference
 	call1, _ := e.CreateCall(engine.CreateCallParams{
@@ -399,7 +398,7 @@ func TestStatusCallbacks(t *testing.T) {
 	)
 	defer e.Close()
 
-	subAccount, _ := e.CreateSubAccount("Test Account")
+	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	call, _ := e.CreateCall(engine.CreateCallParams{
 		AccountSID:     subAccount.SID,
@@ -442,7 +441,7 @@ func TestCallNoAnswer(t *testing.T) {
 	)
 	defer e.Close()
 
-	subAccount, _ := e.CreateSubAccount("Test Account")
+	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	call, _ := e.CreateCall(engine.CreateCallParams{
 		AccountSID: subAccount.SID,
@@ -478,7 +477,7 @@ func TestListCallsFilter(t *testing.T) {
 	)
 	defer e.Close()
 
-	subAccount, _ := e.CreateSubAccount("Test Account")
+	subAccount := createTestSubAccount(t, e, "Test Account")
 
 	// Create multiple calls
 	e.CreateCall(engine.CreateCallParams{
@@ -520,4 +519,22 @@ func TestListCallsFilter(t *testing.T) {
 	if len(calls) != 3 {
 		t.Errorf("Expected 3 queued calls, got %d", len(calls))
 	}
+}
+
+func createTestSubAccount(t *testing.T, e *engine.EngineImpl, friendlyName string) *model.SubAccount {
+	t.Helper()
+	params := (&twilioopenapi.CreateAccountParams{}).SetFriendlyName(friendlyName)
+	account, err := e.CreateAccount(params)
+	if err != nil {
+		t.Fatalf("failed to create account: %v", err)
+	}
+	if account.Sid == nil {
+		t.Fatal("expected account SID to be set")
+	}
+	sid := model.SID(*account.Sid)
+	subAccount, ok := e.GetSubAccount(sid)
+	if !ok {
+		t.Fatalf("subaccount %s not found after creation", sid)
+	}
+	return subAccount
 }

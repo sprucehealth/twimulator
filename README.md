@@ -29,7 +29,11 @@ package main
 
 import (
 	"time"
+
+	openapi "github.com/twilio/twilio-go/rest/api/v2010"
+
 	"twimulator/engine"
+	"twimulator/model"
 )
 
 func main() {
@@ -38,11 +42,13 @@ func main() {
 	defer e.Close()
 
 	// Create a subaccount (required for all calls)
-	subAccount, _ := e.CreateSubAccount("Test Account")
+	params := (&openapi.CreateAccountParams{}).SetFriendlyName("Test Account")
+	account, _ := e.CreateAccount(params)
+	accountSID := model.SID(*account.Sid)
 
 	// Create a call
 	call, _ := e.CreateCall(engine.CreateCallParams{
-		AccountSID: subAccount.SID,
+		AccountSID: accountSID,
 		From:       "+15551234567",
 		To:         "+18005551234",
 		AnswerURL:  "http://localhost:8080/voice",
@@ -81,7 +87,15 @@ func TestVoiceFlow(t *testing.T) {
 	defer e.Close()
 
 	// Make a call to your test server
+	account, _ := e.CreateAccount((&openapi.CreateAccountParams{}).SetFriendlyName("Integration Test"))
+	if account.Sid == nil {
+		t.Fatalf("expected account sid")
+	}
+	accountSID := model.SID(*account.Sid)
+
+	// Make a call to your test server
 	call, _ := e.CreateCall(engine.CreateCallParams{
+		AccountSID: accountSID,
 		From:      "+1234",
 		To:        "+5678",
 		AnswerURL: testServer.URL + "/voice",
@@ -188,15 +202,24 @@ Like Twilio, all resources in Twimulator are scoped to subaccounts. This allows 
 ### Creating SubAccounts
 
 ```go
-// Create a subaccount
-subAccount, err := engine.CreateSubAccount("Production Account")
+import (
+    openapi "github.com/twilio/twilio-go/rest/api/v2010"
+    "twimulator/model"
+)
+
+params := (&openapi.CreateAccountParams{}).SetFriendlyName("Production Account")
+account, err := engine.CreateAccount(params)
 if err != nil {
     log.Fatal(err)
 }
+if account.Sid == nil {
+    log.Fatal("account sid missing")
+}
+accountSID := model.SID(*account.Sid)
 
 // All calls must specify the AccountSID
 call, err := engine.CreateCall(engine.CreateCallParams{
-    AccountSID: subAccount.SID,
+    AccountSID: accountSID,
     From:       "+15551234567",
     To:         "+18005551234",
     AnswerURL:  "http://example.com/voice",

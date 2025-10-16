@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 
 	"twimulator/engine"
@@ -19,10 +20,10 @@ var content embed.FS
 
 // ConsoleServer provides a web UI for inspecting engine state
 type ConsoleServer struct {
-	Addr    string
-	engine  engine.Engine
-	server  *http.Server
-	tmpl    *template.Template
+	Addr   string
+	engine engine.Engine
+	server *http.Server
+	tmpl   *template.Template
 }
 
 // NewConsoleServer creates a new console server
@@ -115,6 +116,12 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 			calls = append(calls, call)
 		}
 	}
+	sort.SliceStable(calls, func(i, j int) bool {
+		if calls[i].StartAt.Equal(calls[j].StartAt) {
+			return calls[i].SID < calls[j].SID
+		}
+		return calls[i].StartAt.Before(calls[j].StartAt)
+	})
 
 	// Filter queues by AccountSID
 	queues := make([]*model.Queue, 0)

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
+
 	"twimulator/engine"
 	"twimulator/model"
 )
@@ -18,19 +20,9 @@ func NewClient(e engine.Engine) *Client {
 	return &Client{engine: e}
 }
 
-// CreateSubAccount creates a new subaccount
-func (c *Client) CreateSubAccount(req CreateSubAccountRequest) (*SubAccountResponse, error) {
-	subAccount, err := c.engine.CreateSubAccount(req.FriendlyName)
-	if err != nil {
-		return nil, err
-	}
-
-	return &SubAccountResponse{
-		SID:          string(subAccount.SID),
-		FriendlyName: subAccount.FriendlyName,
-		Status:       subAccount.Status,
-		CreatedAt:    subAccount.CreatedAt,
-	}, nil
+// CreateAccount delegates to the engine's account creation for drop-in Twilio compatibility
+func (c *Client) CreateAccount(params *twilioopenapi.CreateAccountParams) (*twilioopenapi.ApiV2010Account, error) {
+	return c.engine.CreateAccount(params)
 }
 
 // GetSubAccount retrieves a subaccount by SID
@@ -45,6 +37,7 @@ func (c *Client) GetSubAccount(sid string) (*SubAccountResponse, bool) {
 		FriendlyName: subAccount.FriendlyName,
 		Status:       subAccount.Status,
 		CreatedAt:    subAccount.CreatedAt,
+		AuthToken:    subAccount.AuthToken,
 	}, true
 }
 
@@ -58,14 +51,10 @@ func (c *Client) ListSubAccounts() []*SubAccountResponse {
 			FriendlyName: sa.FriendlyName,
 			Status:       sa.Status,
 			CreatedAt:    sa.CreatedAt,
+			AuthToken:    sa.AuthToken,
 		}
 	}
 	return responses
-}
-
-// CreateSubAccountRequest represents the request to create a subaccount
-type CreateSubAccountRequest struct {
-	FriendlyName string
 }
 
 // SubAccountResponse represents a subaccount
@@ -74,6 +63,7 @@ type SubAccountResponse struct {
 	FriendlyName string    `json:"friendly_name"`
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
+	AuthToken    string    `json:"auth_token"`
 }
 
 // CreateCallRequest represents the request to create a call
@@ -89,15 +79,15 @@ type CreateCallRequest struct {
 
 // CallResponse represents a Twilio-like call response
 type CallResponse struct {
-	SID            string    `json:"sid"`
-	From           string    `json:"from"`
-	To             string    `json:"to"`
-	Status         string    `json:"status"`
-	Direction      string    `json:"direction"`
-	StartTime      time.Time `json:"start_time"`
-	AnsweredTime   *time.Time `json:"answered_time,omitempty"`
-	EndTime        *time.Time `json:"end_time,omitempty"`
-	ParentCallSID  *string    `json:"parent_call_sid,omitempty"`
+	SID           string     `json:"sid"`
+	From          string     `json:"from"`
+	To            string     `json:"to"`
+	Status        string     `json:"status"`
+	Direction     string     `json:"direction"`
+	StartTime     time.Time  `json:"start_time"`
+	AnsweredTime  *time.Time `json:"answered_time,omitempty"`
+	EndTime       *time.Time `json:"end_time,omitempty"`
+	ParentCallSID *string    `json:"parent_call_sid,omitempty"`
 }
 
 // CreateCall creates a new call via the engine
@@ -173,10 +163,10 @@ func (c *Client) callToResponse(call *model.Call) *CallResponse {
 
 // QueueResponse represents a queue
 type QueueResponse struct {
-	SID          string   `json:"sid"`
-	Name         string   `json:"name"`
-	CurrentSize  int      `json:"current_size"`
-	Members      []string `json:"members"`
+	SID         string   `json:"sid"`
+	Name        string   `json:"name"`
+	CurrentSize int      `json:"current_size"`
+	Members     []string `json:"members"`
 }
 
 // GetQueue retrieves a queue by name and subaccount

@@ -36,7 +36,7 @@ type EngineImpl struct {
 ```
 
 **New Methods:**
-- `CreateSubAccount(friendlyName string) (*model.SubAccount, error)`
+- `CreateAccount(params *openapi.CreateAccountParams) (*openapi.ApiV2010Account, error)`
 - `GetSubAccount(sid model.SID) (*model.SubAccount, bool)`
 - `ListSubAccounts() []*model.SubAccount`
 
@@ -53,25 +53,15 @@ type EngineImpl struct {
 
 ### 3. API Layer (`twilioapi/api.go`)
 
-**New Types:**
-```go
-type CreateSubAccountRequest struct {
-    FriendlyName string
-}
-
-type SubAccountResponse struct {
-    SID          string
-    FriendlyName string
-    Status       string
-    CreatedAt    time.Time
-}
-```
+**Account Creation:**
+- Leverages Twilio's generated types: `openapi.CreateAccountParams` for input and `openapi.ApiV2010Account` for responses.
+- Engine stores the simulated subaccount while returning an `ApiV2010Account` with `Sid`, `AuthToken`, and friendly name populated.
 
 **Updated:**
 - `CreateCallRequest.AccountSID` - now required
-- `Client.CreateSubAccount()` - create subaccounts
-- `Client.GetSubAccount()` - retrieve subaccount
-- `Client.ListSubAccounts()` - list all
+- `Client.CreateAccount()` - proxies to the engine
+- `Client.GetSubAccount()` - retrieve subaccount (now including `AuthToken`)
+- `Client.ListSubAccounts()` - list all (now including `AuthToken`)
 - `GetQueue/GetConference()` - accept accountSID parameter
 
 ### 4. Console UI (`console/server.go`, `console/templates/`)
@@ -107,8 +97,9 @@ type SubAccountResponse struct {
 ### 5. Example (`examples/console_demo.go`)
 
 ```go
-// Create subaccount first
-subAccount, _ := e.CreateSubAccount("Demo SubAccount")
+// Create account via Twilio-compatible params
+acct, _ := e.CreateAccount((&openapi.CreateAccountParams{}).SetFriendlyName("Demo SubAccount"))
+subAccount, _ := e.GetSubAccount(model.SID(*acct.Sid))
 
 // All CreateCall invocations include AccountSID
 call, _ := e.CreateCall(engine.CreateCallParams{
@@ -154,8 +145,9 @@ SubAccounts use "AC" prefix matching Twilio's actual format.
 ```go
 e := engine.NewEngine(engine.WithManualClock())
 
-// Create subaccount
-account := e.CreateSubAccount("Production")
+// Create account
+acct, _ := e.CreateAccount((&openapi.CreateAccountParams{}).SetFriendlyName("Production"))
+account, _ := e.GetSubAccount(model.SID(*acct.Sid))
 
 // Create call
 call, _ := e.CreateCall(engine.CreateCallParams{
@@ -169,8 +161,10 @@ call, _ := e.CreateCall(engine.CreateCallParams{
 ### Multi-Tenant Testing
 ```go
 // Create multiple subaccounts
-acctA, _ := e.CreateSubAccount("Customer A")
-acctB, _ := e.CreateSubAccount("Customer B")
+acctAResp, _ := e.CreateAccount((&openapi.CreateAccountParams{}).SetFriendlyName("Customer A"))
+acctBResp, _ := e.CreateAccount((&openapi.CreateAccountParams{}).SetFriendlyName("Customer B"))
+acctA, _ := e.GetSubAccount(model.SID(*acctAResp.Sid))
+acctB, _ := e.GetSubAccount(model.SID(*acctBResp.Sid))
 
 // Same queue name, different subaccounts - no conflict
 call1, _ := e.CreateCall(engine.CreateCallParams{
@@ -232,8 +226,9 @@ queue, _ := e.GetQueue("support")
 
 **After:**
 ```go
-// Create subaccount once
-subAccount, _ := e.CreateSubAccount("Default")
+// Create account once
+acctResp, _ := e.CreateAccount((&openapi.CreateAccountParams{}).SetFriendlyName("Default"))
+subAccount, _ := e.GetSubAccount(model.SID(*acctResp.Sid))
 
 call, _ := e.CreateCall(engine.CreateCallParams{
     AccountSID: subAccount.SID,  // Add this

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
+
 	"twimulator/httpstub"
 	"twimulator/model"
 )
@@ -15,7 +17,7 @@ import (
 // Engine is the main interface for the Twilio Voice simulator
 type Engine interface {
 	// Subaccount management
-	CreateSubAccount(friendlyName string) (*model.SubAccount, error)
+	CreateAccount(params *twilioopenapi.CreateAccountParams) (*twilioopenapi.ApiV2010Account, error)
 	GetSubAccount(sid model.SID) (*model.SubAccount, bool)
 	ListSubAccounts() []*model.SubAccount
 
@@ -61,25 +63,25 @@ type CallFilter struct {
 
 // StateSnapshot is a JSON-serializable snapshot of the engine state
 type StateSnapshot struct {
-	Calls       map[model.SID]*model.Call       `json:"calls"`
-	Queues      map[string]*model.Queue         `json:"queues"`
-	Conferences map[string]*model.Conference    `json:"conferences"`
-	Timestamp   time.Time                       `json:"timestamp"`
+	Calls       map[model.SID]*model.Call    `json:"calls"`
+	Queues      map[string]*model.Queue      `json:"queues"`
+	Conferences map[string]*model.Conference `json:"conferences"`
+	Timestamp   time.Time                    `json:"timestamp"`
 }
 
 // EngineImpl is the concrete implementation of Engine
 type EngineImpl struct {
-	mu          sync.RWMutex
-	clock       Clock
-	webhook     httpstub.WebhookClient
-	apiVersion  string
+	mu         sync.RWMutex
+	clock      Clock
+	webhook    httpstub.WebhookClient
+	apiVersion string
 
 	// Subaccount management
 	subAccounts map[model.SID]*model.SubAccount
 
 	// Resources are scoped by subaccount SID
-	calls       map[model.SID]*model.Call       // All calls across all subaccounts
-	queues      map[model.SID]map[string]*model.Queue // subAccountSID -> queue name -> Queue
+	calls       map[model.SID]*model.Call                  // All calls across all subaccounts
+	queues      map[model.SID]map[string]*model.Queue      // subAccountSID -> queue name -> Queue
 	conferences map[model.SID]map[string]*model.Conference // subAccountSID -> conf name -> Conference
 
 	// Call runners
@@ -144,16 +146,26 @@ func NewEngine(opts ...EngineOption) *EngineImpl {
 	return e
 }
 
-// CreateSubAccount creates a new subaccount
-func (e *EngineImpl) CreateSubAccount(friendlyName string) (*model.SubAccount, error) {
+// CreateAccount creates a new simulated Twilio subaccount
+func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*twilioopenapi.ApiV2010Account, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	friendlyName := ""
+	if params != nil && params.FriendlyName != nil {
+		friendlyName = *params.FriendlyName
+	}
+
+	now := e.clock.Now()
+	sid := model.NewSubAccountSID()
+	authToken := model.NewAuthToken()
+
 	subAccount := &model.SubAccount{
-		SID:          model.NewSubAccountSID(),
+		SID:          sid,
 		FriendlyName: friendlyName,
 		Status:       "active",
-		CreatedAt:    e.clock.Now(),
+		CreatedAt:    now,
+		AuthToken:    authToken,
 	}
 
 	e.subAccounts[subAccount.SID] = subAccount
@@ -162,7 +174,19 @@ func (e *EngineImpl) CreateSubAccount(friendlyName string) (*model.SubAccount, e
 	e.queues[subAccount.SID] = make(map[string]*model.Queue)
 	e.conferences[subAccount.SID] = make(map[string]*model.Conference)
 
-	return subAccount, nil
+	sidStr := string(sid)
+	authTokenCopy := authToken
+	status := subAccount.Status
+	friendlyCopy := friendlyName
+	created := now.UTC().Format(time.RFC1123Z)
+
+	return &twilioopenapi.ApiV2010Account{
+		Sid:          &sidStr,
+		AuthToken:    &authTokenCopy,
+		FriendlyName: &friendlyCopy,
+		Status:       &status,
+		DateCreated:  &created,
+	}, nil
 }
 
 // GetSubAccount retrieves a subaccount by SID
