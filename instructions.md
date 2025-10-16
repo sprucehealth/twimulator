@@ -114,8 +114,7 @@ type Clock interface {
 type Engine interface {
   // SubAccount management
   CreateAccount(params *openapi.CreateAccountParams) (*openapi.ApiV2010Account, error)
-  GetSubAccount(sid model.SID) (*model.SubAccount, bool)
-  ListSubAccounts() []*model.SubAccount
+  ListAccount(params *openapi.ListAccountParams) ([]openapi.ApiV2010Account, error)
 
   // Core lifecycle
   CreateCall(params CreateCallParams) (*model.Call, error)
@@ -244,7 +243,8 @@ func Test_EnqueueAndConferenceFlow(t *testing.T) {
 
   // Create a subaccount for this test
   acct, _ := e.CreateAccount((&openapi.CreateAccountParams{}).SetFriendlyName("Test Account"))
-  subAccount, _ := e.GetSubAccount(model.SID(*acct.Sid))
+  snap := e.Snapshot()
+  subAccount := snap.SubAccounts[model.SID(*acct.Sid)]
 
   // 1) Create first call; it answers and enqueues into "support"
   c1, _ := e.CreateCall(engine.CreateCallParams{

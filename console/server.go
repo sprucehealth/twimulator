@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
+
+	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 
 	"twimulator/engine"
 	"twimulator/model"
@@ -24,6 +27,14 @@ type ConsoleServer struct {
 	engine engine.Engine
 	server *http.Server
 	tmpl   *template.Template
+}
+
+type accountView struct {
+	SID          string
+	FriendlyName string
+	Status       string
+	CreatedAt    time.Time
+	AuthToken    string
 }
 
 // NewConsoleServer creates a new console server
@@ -83,10 +94,26 @@ func (cs *ConsoleServer) handleSubAccounts(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	subAccounts := cs.engine.ListSubAccounts()
+	accounts, err := cs.engine.ListAccount(nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to list accounts: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	views := make([]accountView, 0, len(accounts))
+	for _, acct := range accounts {
+		views = append(views, toAccountView(acct))
+	}
+
+	sort.SliceStable(views, func(i, j int) bool {
+		if views[i].CreatedAt.Equal(views[j].CreatedAt) {
+			return views[i].SID < views[j].SID
+		}
+		return views[i].CreatedAt.Before(views[j].CreatedAt)
+	})
 
 	data := map[string]any{
-		"SubAccounts": subAccounts,
+		"SubAccounts": views,
 	}
 
 	if err := cs.tmpl.ExecuteTemplate(w, "subaccounts.html", data); err != nil {
@@ -101,18 +128,33 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	subAccount, exists := cs.engine.GetSubAccount(model.SID(accountSID))
-	if !exists {
+	accounts, err := cs.engine.ListAccount(nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to list accounts: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var view *accountView
+	for _, acct := range accounts {
+		if acct.Sid != nil && *acct.Sid == accountSID {
+			v := toAccountView(acct)
+			view = &v
+			break
+		}
+	}
+
+	if view == nil {
 		http.NotFound(w, r)
 		return
 	}
 
+	accountModelSID := model.SID(accountSID)
 	snap := cs.engine.Snapshot()
 
 	// Filter calls by AccountSID
 	calls := make([]*model.Call, 0)
 	for _, call := range snap.Calls {
-		if call.AccountSID == subAccount.SID {
+		if call.AccountSID == accountModelSID {
 			calls = append(calls, call)
 		}
 	}
@@ -126,7 +168,7 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 	// Filter queues by AccountSID
 	queues := make([]*model.Queue, 0)
 	for _, queue := range snap.Queues {
-		if queue.AccountSID == subAccount.SID {
+		if queue.AccountSID == accountModelSID {
 			queues = append(queues, queue)
 		}
 	}
@@ -134,13 +176,13 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 	// Filter conferences by AccountSID
 	conferences := make([]*model.Conference, 0)
 	for _, conf := range snap.Conferences {
-		if conf.AccountSID == subAccount.SID {
+		if conf.AccountSID == accountModelSID {
 			conferences = append(conferences, conf)
 		}
 	}
 
 	data := map[string]any{
-		"SubAccount":  subAccount,
+		"SubAccount":  view,
 		"Calls":       calls,
 		"Queues":      queues,
 		"Conferences": conferences,
@@ -180,4 +222,28 @@ func (cs *ConsoleServer) handleSnapshot(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewEncoder(w).Encode(snap); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func toAccountView(acct openapi.ApiV2010Account) accountView {
+	var created time.Time
+	if acct.DateCreated != nil {
+		if t, err := time.Parse(time.RFC1123Z, *acct.DateCreated); err == nil {
+			created = t
+		}
+	}
+
+	view := accountView{CreatedAt: created}
+	if acct.Sid != nil {
+		view.SID = *acct.Sid
+	}
+	if acct.FriendlyName != nil {
+		view.FriendlyName = *acct.FriendlyName
+	}
+	if acct.Status != nil {
+		view.Status = *acct.Status
+	}
+	if acct.AuthToken != nil {
+		view.AuthToken = *acct.AuthToken
+	}
+	return view
 }

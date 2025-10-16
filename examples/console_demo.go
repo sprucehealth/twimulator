@@ -33,7 +33,8 @@ func main() {
 		log.Fatalf("CreateAccount returned no SID")
 	}
 	subAccountSID := model.SID(*account.Sid)
-	subAccount, ok := e.GetSubAccount(subAccountSID)
+	snap := e.Snapshot()
+	subAccount, ok := snap.SubAccounts[subAccountSID]
 	if !ok {
 		log.Fatalf("Subaccount %s not found after creation", subAccountSID)
 	}

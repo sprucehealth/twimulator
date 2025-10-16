@@ -532,9 +532,63 @@ func createTestSubAccount(t *testing.T, e *engine.EngineImpl, friendlyName strin
 		t.Fatal("expected account SID to be set")
 	}
 	sid := model.SID(*account.Sid)
-	subAccount, ok := e.GetSubAccount(sid)
+	snap := e.Snapshot()
+	subAccount, ok := snap.SubAccounts[sid]
 	if !ok {
 		t.Fatalf("subaccount %s not found after creation", sid)
 	}
 	return subAccount
+}
+
+func TestListAccountFiltersByFriendlyName(t *testing.T) {
+	e := engine.NewEngine(engine.WithManualClock())
+	defer e.Close()
+
+	// Create three accounts with two sharing the same friendly name
+	acct1, err := e.CreateAccount((&twilioopenapi.CreateAccountParams{}).SetFriendlyName("Alpha"))
+	if err != nil {
+		t.Fatalf("unexpected error creating account: %v", err)
+	}
+	acct2, err := e.CreateAccount((&twilioopenapi.CreateAccountParams{}).SetFriendlyName("Beta"))
+	if err != nil {
+		t.Fatalf("unexpected error creating account: %v", err)
+	}
+	acct3, err := e.CreateAccount((&twilioopenapi.CreateAccountParams{}).SetFriendlyName("Alpha"))
+	if err != nil {
+		t.Fatalf("unexpected error creating account: %v", err)
+	}
+
+	accounts, err := e.ListAccount(nil)
+	if err != nil {
+		t.Fatalf("list account returned error: %v", err)
+	}
+	if len(accounts) != 3 {
+		t.Fatalf("expected 3 accounts, got %d", len(accounts))
+	}
+
+	filtered, err := e.ListAccount((&twilioopenapi.ListAccountParams{}).SetFriendlyName("Alpha"))
+	if err != nil {
+		t.Fatalf("list account with filter returned error: %v", err)
+	}
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2 accounts with friendly name Alpha, got %d", len(filtered))
+	}
+
+	// Ensure the returned SIDs match the created accounts for the filtered set
+	expected := map[string]struct{}{
+		*acct1.Sid: {},
+		*acct3.Sid: {},
+	}
+	for _, acct := range filtered {
+		if acct.Sid == nil {
+			t.Fatal("returned account missing SID")
+		}
+		if _, ok := expected[*acct.Sid]; !ok {
+			t.Fatalf("unexpected account SID %s in filtered results", *acct.Sid)
+		}
+		if acct.AuthToken == nil || *acct.AuthToken == "" {
+			t.Fatalf("expected auth token for account %s", *acct.Sid)
+		}
+	}
+	_ = acct2
 }

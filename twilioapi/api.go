@@ -25,45 +25,9 @@ func (c *Client) CreateAccount(params *twilioopenapi.CreateAccountParams) (*twil
 	return c.engine.CreateAccount(params)
 }
 
-// GetSubAccount retrieves a subaccount by SID
-func (c *Client) GetSubAccount(sid string) (*SubAccountResponse, bool) {
-	subAccount, exists := c.engine.GetSubAccount(model.SID(sid))
-	if !exists {
-		return nil, false
-	}
-
-	return &SubAccountResponse{
-		SID:          string(subAccount.SID),
-		FriendlyName: subAccount.FriendlyName,
-		Status:       subAccount.Status,
-		CreatedAt:    subAccount.CreatedAt,
-		AuthToken:    subAccount.AuthToken,
-	}, true
-}
-
-// ListSubAccounts lists all subaccounts
-func (c *Client) ListSubAccounts() []*SubAccountResponse {
-	subAccounts := c.engine.ListSubAccounts()
-	responses := make([]*SubAccountResponse, len(subAccounts))
-	for i, sa := range subAccounts {
-		responses[i] = &SubAccountResponse{
-			SID:          string(sa.SID),
-			FriendlyName: sa.FriendlyName,
-			Status:       sa.Status,
-			CreatedAt:    sa.CreatedAt,
-			AuthToken:    sa.AuthToken,
-		}
-	}
-	return responses
-}
-
-// SubAccountResponse represents a subaccount
-type SubAccountResponse struct {
-	SID          string    `json:"sid"`
-	FriendlyName string    `json:"friendly_name"`
-	Status       string    `json:"status"`
-	CreatedAt    time.Time `json:"created_at"`
-	AuthToken    string    `json:"auth_token"`
+// ListAccount delegates to the engine's Twilio-compatible listing implementation
+func (c *Client) ListAccount(params *twilioopenapi.ListAccountParams) ([]twilioopenapi.ApiV2010Account, error) {
+	return c.engine.ListAccount(params)
 }
 
 // CreateCallRequest represents the request to create a call

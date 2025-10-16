@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"sort"
 	"sync"
 	"time"
 
@@ -18,8 +19,7 @@ import (
 type Engine interface {
 	// Subaccount management
 	CreateAccount(params *twilioopenapi.CreateAccountParams) (*twilioopenapi.ApiV2010Account, error)
-	GetSubAccount(sid model.SID) (*model.SubAccount, bool)
-	ListSubAccounts() []*model.SubAccount
+	ListAccount(params *twilioopenapi.ListAccountParams) ([]twilioopenapi.ApiV2010Account, error)
 
 	// Core lifecycle
 	CreateCall(params CreateCallParams) (*model.Call, error)
@@ -63,10 +63,11 @@ type CallFilter struct {
 
 // StateSnapshot is a JSON-serializable snapshot of the engine state
 type StateSnapshot struct {
-	Calls       map[model.SID]*model.Call    `json:"calls"`
-	Queues      map[string]*model.Queue      `json:"queues"`
-	Conferences map[string]*model.Conference `json:"conferences"`
-	Timestamp   time.Time                    `json:"timestamp"`
+	Calls       map[model.SID]*model.Call       `json:"calls"`
+	Queues      map[string]*model.Queue         `json:"queues"`
+	Conferences map[string]*model.Conference    `json:"conferences"`
+	SubAccounts map[model.SID]*model.SubAccount `json:"sub_accounts"`
+	Timestamp   time.Time                       `json:"timestamp"`
 }
 
 // EngineImpl is the concrete implementation of Engine
@@ -189,24 +190,48 @@ func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*
 	}, nil
 }
 
-// GetSubAccount retrieves a subaccount by SID
-func (e *EngineImpl) GetSubAccount(sid model.SID) (*model.SubAccount, bool) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	subAccount, exists := e.subAccounts[sid]
-	return subAccount, exists
-}
-
-// ListSubAccounts returns all subaccounts
-func (e *EngineImpl) ListSubAccounts() []*model.SubAccount {
+// ListAccount returns Twilio-style account representations filtered by optional friendly name
+func (e *EngineImpl) ListAccount(params *twilioopenapi.ListAccountParams) ([]twilioopenapi.ApiV2010Account, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	result := make([]*model.SubAccount, 0, len(e.subAccounts))
-	for _, sa := range e.subAccounts {
-		result = append(result, sa)
+	var friendly string
+	if params != nil && params.FriendlyName != nil {
+		friendly = *params.FriendlyName
 	}
-	return result
+
+	matches := make([]*model.SubAccount, 0)
+	for _, sa := range e.subAccounts {
+		if friendly != "" && sa.FriendlyName != friendly {
+			continue
+		}
+		matches = append(matches, sa)
+	}
+
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].CreatedAt.Equal(matches[j].CreatedAt) {
+			return matches[i].SID < matches[j].SID
+		}
+		return matches[i].CreatedAt.Before(matches[j].CreatedAt)
+	})
+
+	results := make([]twilioopenapi.ApiV2010Account, len(matches))
+	for i, sa := range matches {
+		sidStr := string(sa.SID)
+		authToken := sa.AuthToken
+		friendlyCopy := sa.FriendlyName
+		status := sa.Status
+		created := sa.CreatedAt.UTC().Format(time.RFC1123Z)
+		results[i] = twilioopenapi.ApiV2010Account{
+			Sid:          &sidStr,
+			AuthToken:    &authToken,
+			FriendlyName: &friendlyCopy,
+			Status:       &status,
+			DateCreated:  &created,
+		}
+	}
+
+	return results, nil
 }
 
 // CreateCall initiates a new call
@@ -377,6 +402,7 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 		Calls:       make(map[model.SID]*model.Call),
 		Queues:      make(map[string]*model.Queue),
 		Conferences: make(map[string]*model.Conference),
+		SubAccounts: make(map[model.SID]*model.SubAccount),
 		Timestamp:   e.clock.Now(),
 	}
 
@@ -408,6 +434,11 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 			confCopy.Timeline = append([]model.Event{}, conf.Timeline...)
 			snap.Conferences[name] = &confCopy
 		}
+	}
+
+	for sid, sa := range e.subAccounts {
+		saCopy := *sa
+		snap.SubAccounts[sid] = &saCopy
 	}
 
 	return snap
