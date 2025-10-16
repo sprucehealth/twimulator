@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Queues - Twimulator Console</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Twimulator Console</h1>
+            <nav>
+                <a href="/">Calls</a>
+                <a href="/queues" class="active">Queues</a>
+                <a href="/conferences">Conferences</a>
+                <a href="/api/snapshot" target="_blank">API Snapshot</a>
+            </nav>
+        </header>
+
+        <main>
+            <h2>Queues</h2>
+
+            {{if .Queues}}
+            <table>
+                <thead>
+                    <tr>
+                        <th>SID</th>
+                        <th>Name</th>
+                        <th>Members</th>
+                        <th>Events</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Queues}}
+                    <tr>
+                        <td>{{.SID}}</td>
+                        <td><strong>{{.Name}}</strong></td>
+                        <td>{{len .Members}}</td>
+                        <td>{{len .Timeline}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty">No queues yet.</p>
+            {{end}}
+        </main>
+    </div>
+</body>
+</html>

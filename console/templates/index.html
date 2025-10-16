@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twimulator Console - Calls</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Twimulator Console</h1>
+            <nav>
+                <a href="/" class="active">Calls</a>
+                <a href="/queues">Queues</a>
+                <a href="/conferences">Conferences</a>
+                <a href="/api/snapshot" target="_blank">API Snapshot</a>
+            </nav>
+        </header>
+
+        <main>
+            <h2>Calls</h2>
+            <div class="timestamp">Snapshot at: {{.Timestamp.Format "2006-01-02 15:04:05 MST"}}</div>
+
+            {{if .Calls}}
+            <table>
+                <thead>
+                    <tr>
+                        <th>SID</th>
+                        <th>From</th>
+                        <th>To</th>
+                        <th>Direction</th>
+                        <th>Status</th>
+                        <th>Start Time</th>
+                        <th>Duration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Calls}}
+                    <tr>
+                        <td><a href="/calls/{{.SID}}">{{.SID}}</a></td>
+                        <td>{{.From}}</td>
+                        <td>{{.To}}</td>
+                        <td>{{.Direction}}</td>
+                        <td><span class="status status-{{.Status}}">{{.Status}}</span></td>
+                        <td>{{.StartAt.Format "15:04:05"}}</td>
+                        <td>
+                            {{if .EndedAt}}
+                                {{printf "%.1fs" .EndedAt.Sub .StartAt.Seconds}}
+                            {{else if .AnsweredAt}}
+                                ongoing
+                            {{else}}
+                                -
+                            {{end}}
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty">No calls yet.</p>
+            {{end}}
+        </main>
+    </div>
+</body>
+</html>

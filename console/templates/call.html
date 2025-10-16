@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Call {{.Call.SID}} - Twimulator Console</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Twimulator Console</h1>
+            <nav>
+                <a href="/">Calls</a>
+                <a href="/queues">Queues</a>
+                <a href="/conferences">Conferences</a>
+                <a href="/api/snapshot" target="_blank">API Snapshot</a>
+            </nav>
+        </header>
+
+        <main>
+            <div class="breadcrumb">
+                <a href="/">Calls</a> &raquo; {{.Call.SID}}
+            </div>
+
+            <h2>Call Details</h2>
+
+            <div class="detail-grid">
+                <div class="detail-item">
+                    <label>SID</label>
+                    <div>{{.Call.SID}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Status</label>
+                    <div><span class="status status-{{.Call.Status}}">{{.Call.Status}}</span></div>
+                </div>
+                <div class="detail-item">
+                    <label>From</label>
+                    <div>{{.Call.From}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>To</label>
+                    <div>{{.Call.To}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Direction</label>
+                    <div>{{.Call.Direction}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Current Endpoint</label>
+                    <div>{{if .Call.CurrentEndpoint}}{{.Call.CurrentEndpoint}}{{else}}-{{end}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Start Time</label>
+                    <div>{{.Call.StartAt.Format "2006-01-02 15:04:05"}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Answered Time</label>
+                    <div>{{if .Call.AnsweredAt}}{{.Call.AnsweredAt.Format "15:04:05"}}{{else}}-{{end}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>End Time</label>
+                    <div>{{if .Call.EndedAt}}{{.Call.EndedAt.Format "15:04:05"}}{{else}}-{{end}}</div>
+                </div>
+            </div>
+
+            {{if .Call.Variables}}
+            <h3>Variables</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range $key, $value := .Call.Variables}}
+                    <tr>
+                        <td><code>{{$key}}</code></td>
+                        <td>{{$value}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{end}}
+
+            <h3>Timeline</h3>
+            <div class="timeline">
+                {{range .Call.Timeline}}
+                <div class="timeline-event">
+                    <div class="timeline-time">{{.Time.Format "15:04:05.000"}}</div>
+                    <div class="timeline-content">
+                        <div class="timeline-type">{{.Type}}</div>
+                        {{if .Detail}}
+                        <div class="timeline-detail">
+                            <pre>{{json .Detail}}</pre>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+                {{end}}
+            </div>
+        </main>
+    </div>
+</body>
+</html>
