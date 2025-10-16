@@ -557,3 +557,38 @@ func mustCreateCall(t *testing.T, e *engine.EngineImpl, params *twilioopenapi.Cr
 	}
 	return call
 }
+
+func TestUpdateCall(t *testing.T) {
+	e := engine.NewEngine(engine.WithManualClock())
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
+
+	updateParams := (&twilioopenapi.UpdateCallParams{}).
+		SetUrl("http://test/new-answer").
+		SetStatusCallback("http://test/status").
+		SetStatus("completed")
+
+	resp, err := e.UpdateCall(string(call.SID), updateParams)
+	if err != nil {
+		t.Fatalf("update call failed: %v", err)
+	}
+	if resp == nil || resp.Sid == nil {
+		t.Fatal("expected response SID")
+	}
+
+	got, ok := e.GetCallState(call.SID)
+	if !ok {
+		t.Fatalf("call %s not found after update", call.SID)
+	}
+	if got.AnswerURL != "http://test/new-answer" {
+		t.Fatalf("expected answer URL updated, got %s", got.AnswerURL)
+	}
+	if got.StatusCallback != "http://test/status" {
+		t.Fatalf("expected status callback updated, got %s", got.StatusCallback)
+	}
+	if got.Status != model.CallCompleted {
+		t.Fatalf("expected completed status, got %s", got.Status)
+	}
+}

@@ -24,6 +24,7 @@ type Engine interface {
 
 	// Core lifecycle
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
+	UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error)
 	Hangup(callSID model.SID) error
 	SendDigits(callSID model.SID, digits string) error
 
@@ -334,6 +335,60 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 	}()
 
 	return buildAPICallResponse(call, e.apiVersion), nil
+}
+
+// UpdateCall applies updates to an existing call (status, callback URL, etc.)
+func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error) {
+	e.mu.Lock()
+	call, exists := e.calls[model.SID(sid)]
+	if !exists {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("call %s not found", sid)
+	}
+	runner := e.runners[call.SID]
+	now := e.clock.Now()
+	updatedFields := make(map[string]any)
+	needHangup := false
+
+	if params != nil {
+		if params.Url != nil {
+			call.AnswerURL = *params.Url
+			updatedFields["url"] = *params.Url
+		}
+		if params.StatusCallback != nil {
+			call.StatusCallback = *params.StatusCallback
+			updatedFields["status_callback"] = *params.StatusCallback
+		}
+		if params.Status != nil {
+			status := strings.ToLower(*params.Status)
+			switch status {
+			case "completed", "canceled", "cancelled":
+				if call.Status != model.CallCompleted {
+					needHangup = true
+				}
+				updatedFields["status"] = status
+			}
+		}
+	}
+
+	if len(updatedFields) > 0 {
+		call.Timeline = append(call.Timeline, model.NewEvent(now, "call.updated", updatedFields))
+	}
+
+	if needHangup {
+		e.updateCallStatus(call, model.CallCompleted)
+		end := now
+		call.EndedAt = &end
+	}
+
+	resp := buildAPICallResponse(call, e.apiVersion)
+	e.mu.Unlock()
+
+	if needHangup && runner != nil {
+		runner.Hangup()
+	}
+
+	return resp, nil
 }
 
 // Hangup terminates a call

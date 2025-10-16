@@ -34,6 +34,11 @@ func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopen
 	return c.engine.CreateCall(params)
 }
 
+// UpdateCall proxies call updates to the engine
+func (c *Client) UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error) {
+	return c.engine.UpdateCall(sid, params)
+}
+
 // CallResponse represents a Twilio-like call response
 type CallResponse struct {
 	SID           string     `json:"sid"`

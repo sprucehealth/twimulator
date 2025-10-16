@@ -123,6 +123,7 @@ type Engine interface {
 
   // Introspection
   FetchCall(sid string, params *openapi.FetchCallParams) (*openapi.ApiV2010Call, error)
+  UpdateCall(sid string, params *openapi.UpdateCallParams) (*openapi.ApiV2010Call, error)
   ListCalls(filter CallFilter) []model.Call
   GetQueue(accountSID model.SID, name string) (*model.Queue, bool)  // Queues are scoped by subaccount
   GetConference(accountSID model.SID, name string) (*model.Conference, bool)  // Conferences are scoped by subaccount
