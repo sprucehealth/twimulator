@@ -1,8 +1,6 @@
 package twilioapi
 
 import (
-	"time"
-
 	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
 
 	"twimulator/engine"
@@ -39,55 +37,14 @@ func (c *Client) UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) 
 	return c.engine.UpdateCall(sid, params)
 }
 
-// CallResponse represents a Twilio-like call response
-type CallResponse struct {
-	SID           string     `json:"sid"`
-	From          string     `json:"from"`
-	To            string     `json:"to"`
-	Status        string     `json:"status"`
-	Direction     string     `json:"direction"`
-	StartTime     time.Time  `json:"start_time"`
-	AnsweredTime  *time.Time `json:"answered_time,omitempty"`
-	EndTime       *time.Time `json:"end_time,omitempty"`
-	ParentCallSID *string    `json:"parent_call_sid,omitempty"`
-}
-
 // FetchCall retrieves a call via Twilio-compatible API
 func (c *Client) FetchCall(sid string, params *twilioopenapi.FetchCallParams) (*twilioopenapi.ApiV2010Call, error) {
 	return c.engine.FetchCall(sid, params)
 }
 
-// ListCalls lists all calls
-func (c *Client) ListCalls() []*CallResponse {
-	calls := c.engine.ListCalls(engine.CallFilter{})
-	responses := make([]*CallResponse, len(calls))
-	for i, call := range calls {
-		responses[i] = c.callToResponse(call)
-	}
-	return responses
-}
-
 // HangupCall terminates a call
 func (c *Client) HangupCall(sid string) error {
 	return c.engine.Hangup(model.SID(sid))
-}
-
-func (c *Client) callToResponse(call *model.Call) *CallResponse {
-	resp := &CallResponse{
-		SID:          string(call.SID),
-		From:         call.From,
-		To:           call.To,
-		Status:       string(call.Status),
-		Direction:    string(call.Direction),
-		StartTime:    call.StartAt,
-		AnsweredTime: call.AnsweredAt,
-		EndTime:      call.EndedAt,
-	}
-	if call.ParentCallSID != nil {
-		parentSID := string(*call.ParentCallSID)
-		resp.ParentCallSID = &parentSID
-	}
-	return resp
 }
 
 // QueueResponse represents a queue
