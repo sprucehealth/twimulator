@@ -36,6 +36,7 @@ type Engine interface {
 	// Introspection
 	FetchCall(sid string, params *twilioopenapi.FetchCallParams) (*twilioopenapi.ApiV2010Call, error)
 	FetchConference(sid string, params *twilioopenapi.FetchConferenceParams) (*twilioopenapi.ApiV2010Conference, error)
+	ListConference(params *twilioopenapi.ListConferenceParams) ([]twilioopenapi.ApiV2010Conference, error)
 	ListCalls(filter CallFilter) []*model.Call
 	GetQueue(accountSID model.SID, name string) (*model.Queue, bool)
 	GetConference(accountSID model.SID, name string) (*model.Conference, bool)
@@ -780,6 +781,49 @@ func (e *EngineImpl) FetchConference(sid string, _ *twilioopenapi.FetchConferenc
 	}
 
 	return nil, fmt.Errorf("conference %s not found", sid)
+}
+
+// ListConference returns conferences filtered by optional friendly name
+func (e *EngineImpl) ListConference(params *twilioopenapi.ListConferenceParams) ([]twilioopenapi.ApiV2010Conference, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+	friendlyName := ""
+	if params.FriendlyName != nil {
+		friendlyName = *params.FriendlyName
+	}
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if _, exists := e.subAccounts[accountSID]; !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	confs, exists := e.conferences[accountSID]
+	if !exists {
+		return []twilioopenapi.ApiV2010Conference{}, nil
+	}
+
+	result := make([]twilioopenapi.ApiV2010Conference, 0)
+	for _, conf := range confs {
+		// Filter by friendly name if provided (friendly name is the conference Name)
+		if friendlyName != "" && conf.Name != friendlyName {
+			continue
+		}
+
+		sidStr := string(conf.SID)
+		status := string(conf.Status)
+
+		result = append(result, twilioopenapi.ApiV2010Conference{
+			Sid:    &sidStr,
+			Status: &status,
+		})
+	}
+
+	return result, nil
 }
 
 // GetCallState exposes the internal call model for inspection (tests, console)

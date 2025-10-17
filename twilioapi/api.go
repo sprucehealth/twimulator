@@ -72,6 +72,11 @@ func (c *Client) FetchConference(sid string, params *twilioopenapi.FetchConferen
 	return c.engine.FetchConference(sid, params)
 }
 
+// ListConference returns conferences for an account
+func (c *Client) ListConference(params *twilioopenapi.ListConferenceParams) ([]twilioopenapi.ApiV2010Conference, error) {
+	return c.engine.ListConference(params)
+}
+
 // HangupCall terminates a call
 func (c *Client) HangupCall(sid string) error {
 	return c.engine.Hangup(model.SID(sid))
