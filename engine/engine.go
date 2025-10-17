@@ -30,6 +30,9 @@ type Engine interface {
 	// Core lifecycle
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
 	UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error)
+	AnswerCall(callSID model.SID) error
+	SetCallBusy(callSID model.SID) error
+	SetCallFailed(callSID model.SID) error
 	Hangup(callSID model.SID) error
 	SendDigits(callSID model.SID, digits string) error
 
@@ -712,6 +715,81 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 	}
 
 	return resp, nil
+}
+
+// AnswerCall explicitly answers a ringing call
+func (e *EngineImpl) AnswerCall(callSID model.SID) error {
+	e.mu.RLock()
+	call, exists := e.calls[callSID]
+	if !exists {
+		e.mu.RUnlock()
+		return fmt.Errorf("call %s not found", callSID)
+	}
+	if call.Status != model.CallRinging {
+		e.mu.RUnlock()
+		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
+	}
+	runner := e.runners[callSID]
+	e.mu.RUnlock()
+
+	if runner != nil {
+		select {
+		case runner.answerCh <- struct{}{}:
+		default:
+		}
+	}
+
+	return nil
+}
+
+// SetCallBusy marks a call as busy
+func (e *EngineImpl) SetCallBusy(callSID model.SID) error {
+	e.mu.RLock()
+	call, exists := e.calls[callSID]
+	if !exists {
+		e.mu.RUnlock()
+		return fmt.Errorf("call %s not found", callSID)
+	}
+	if call.Status != model.CallRinging {
+		e.mu.RUnlock()
+		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
+	}
+	runner := e.runners[callSID]
+	e.mu.RUnlock()
+
+	if runner != nil {
+		select {
+		case runner.busyCh <- struct{}{}:
+		default:
+		}
+	}
+
+	return nil
+}
+
+// SetCallFailed marks a call as failed
+func (e *EngineImpl) SetCallFailed(callSID model.SID) error {
+	e.mu.RLock()
+	call, exists := e.calls[callSID]
+	if !exists {
+		e.mu.RUnlock()
+		return fmt.Errorf("call %s not found", callSID)
+	}
+	if call.Status != model.CallRinging {
+		e.mu.RUnlock()
+		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
+	}
+	runner := e.runners[callSID]
+	e.mu.RUnlock()
+
+	if runner != nil {
+		select {
+		case runner.failedCh <- struct{}{}:
+		default:
+		}
+	}
+
+	return nil
 }
 
 // Hangup terminates a call

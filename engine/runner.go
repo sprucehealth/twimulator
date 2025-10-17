@@ -20,6 +20,9 @@ type CallRunner struct {
 	// State for gather
 	gatherCh chan string
 	hangupCh chan struct{}
+	answerCh chan struct{}
+	busyCh   chan struct{}
+	failedCh chan struct{}
 	done     chan struct{}
 }
 
@@ -31,6 +34,9 @@ func NewCallRunner(call *model.Call, engine *EngineImpl, timeout time.Duration) 
 		timeout:  timeout,
 		gatherCh: make(chan string, 1),
 		hangupCh: make(chan struct{}, 1),
+		answerCh: make(chan struct{}, 1),
+		busyCh:   make(chan struct{}, 1),
+		failedCh: make(chan struct{}, 1),
 		done:     make(chan struct{}),
 	}
 }
@@ -42,17 +48,23 @@ func (r *CallRunner) Run(ctx context.Context) {
 	// Transition to ringing
 	r.updateStatus(model.CallRinging)
 
-	// Wait for answer or timeout
+	// Wait for explicit answer, busy, failed, or timeout
 	select {
 	case <-ctx.Done():
 		return
 	case <-r.hangupCh:
 		r.updateStatus(model.CallCompleted)
 		return
+	case <-r.busyCh:
+		r.updateStatus(model.CallBusy)
+		return
+	case <-r.failedCh:
+		r.updateStatus(model.CallFailed)
+		return
 	case <-r.engine.clock.After(r.timeout):
 		r.updateStatus(model.CallNoAnswer)
 		return
-	case <-r.engine.clock.After(50 * time.Millisecond): // Simulate ring then answer
+	case <-r.answerCh:
 		// Answer the call
 		r.answer(ctx)
 	}
