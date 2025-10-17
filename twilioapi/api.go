@@ -77,6 +77,11 @@ func (c *Client) ListConference(params *twilioopenapi.ListConferenceParams) ([]t
 	return c.engine.ListConference(params)
 }
 
+// UpdateConference updates a conference
+func (c *Client) UpdateConference(sid string, params *twilioopenapi.UpdateConferenceParams) (*twilioopenapi.ApiV2010Conference, error) {
+	return c.engine.UpdateConference(sid, params)
+}
+
 // HangupCall terminates a call
 func (c *Client) HangupCall(sid string) error {
 	return c.engine.Hangup(model.SID(sid))

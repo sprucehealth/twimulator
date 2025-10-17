@@ -37,6 +37,7 @@ type Engine interface {
 	FetchCall(sid string, params *twilioopenapi.FetchCallParams) (*twilioopenapi.ApiV2010Call, error)
 	FetchConference(sid string, params *twilioopenapi.FetchConferenceParams) (*twilioopenapi.ApiV2010Conference, error)
 	ListConference(params *twilioopenapi.ListConferenceParams) ([]twilioopenapi.ApiV2010Conference, error)
+	UpdateConference(sid string, params *twilioopenapi.UpdateConferenceParams) (*twilioopenapi.ApiV2010Conference, error)
 	ListCalls(filter CallFilter) []*model.Call
 	GetQueue(accountSID model.SID, name string) (*model.Queue, bool)
 	GetConference(accountSID model.SID, name string) (*model.Conference, bool)
@@ -824,6 +825,65 @@ func (e *EngineImpl) ListConference(params *twilioopenapi.ListConferenceParams) 
 	}
 
 	return result, nil
+}
+
+// UpdateConference updates a conference's status
+func (e *EngineImpl) UpdateConference(sid string, params *twilioopenapi.UpdateConferenceParams) (*twilioopenapi.ApiV2010Conference, error) {
+	if params == nil {
+		return nil, fmt.Errorf("params is required")
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Search all subaccounts for the conference
+	var conf *model.Conference
+	for _, confs := range e.conferences {
+		for _, c := range confs {
+			if string(c.SID) == sid {
+				conf = c
+				break
+			}
+		}
+		if conf != nil {
+			break
+		}
+	}
+
+	if conf == nil {
+		return nil, fmt.Errorf("conference %s not found", sid)
+	}
+
+	// Update status if provided
+	if params.Status != nil {
+		statusStr := strings.ToLower(*params.Status)
+		switch statusStr {
+		case "completed":
+			conf.Status = model.ConferenceCompleted
+			now := e.clock.Now()
+			conf.EndedAt = &now
+			conf.Timeline = append(conf.Timeline, model.NewEvent(
+				now,
+				"conference.ended",
+				map[string]any{
+					"reason": "updated_via_api",
+				},
+			))
+		case "in-progress":
+			conf.Status = model.ConferenceInProgress
+		}
+	}
+
+	// Note: AnnounceUrl and AnnounceMethod are in params but not used for now
+	// as per requirements
+
+	sidStr := string(conf.SID)
+	status := string(conf.Status)
+
+	return &twilioopenapi.ApiV2010Conference{
+		Sid:    &sidStr,
+		Status: &status,
+	}, nil
 }
 
 // GetCallState exposes the internal call model for inspection (tests, console)
