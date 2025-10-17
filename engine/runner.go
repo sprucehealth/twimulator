@@ -66,9 +66,9 @@ func (r *CallRunner) answer(ctx context.Context) {
 	r.engine.mu.Unlock()
 
 	// Fetch initial TwiML
-	twimlResp, err := r.fetchTwiML(ctx, r.call.AnswerURL, url.Values{})
+	twimlResp, err := r.fetchTwiML(ctx, r.call.Url, url.Values{})
 	if err != nil {
-		log.Printf("Failed to fetch AnswerURL for call %s: %v", r.call.SID, err)
+		log.Printf("Failed to fetch Url for call %s: %v", r.call.SID, err)
 		r.updateStatus(model.CallFailed)
 		return
 	}

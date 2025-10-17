@@ -333,22 +333,20 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 
 	now := e.clock.Now()
 	call := &model.Call{
-		SID:            model.NewCallSID(),
-		AccountSID:     accountSIDModel,
-		From:           from,
-		To:             to,
-		Direction:      model.Outbound,
-		Status:         model.CallQueued,
-		StartAt:        now,
-		Timeline:       []model.Event{},
-		Variables:      make(map[string]string),
-		AnswerURL:      answerURL,
-		StatusCallback: statusCallback,
+		SID:                  model.NewCallSID(),
+		AccountSID:           accountSIDModel,
+		From:                 from,
+		To:                   to,
+		Direction:            model.Outbound,
+		Status:               model.CallQueued,
+		StartAt:              now,
+		Timeline:             []model.Event{},
+		Variables:            make(map[string]string),
+		Url:                  answerURL,
+		StatusCallback:       statusCallback,
+		StatusCallbackEvents: statusEvents,
 	}
 
-	if len(statusEvents) > 0 {
-		call.Variables["status_callback_event"] = strings.Join(statusEvents, ",")
-	}
 	if callToken != "" {
 		call.Variables["call_token"] = callToken
 	}
@@ -677,7 +675,7 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 
 	if params != nil {
 		if params.Url != nil {
-			call.AnswerURL = *params.Url
+			call.Url = *params.Url
 			updatedFields["url"] = *params.Url
 		}
 		if params.StatusCallback != nil {
@@ -1284,10 +1282,28 @@ func (e *EngineImpl) updateCallStatus(call *model.Call, newStatus model.CallStat
 		},
 	))
 
-	// Trigger status callback
-	if call.StatusCallback != "" {
+	// Trigger status callback if configured and user is interested in this event
+	if call.StatusCallback != "" && e.shouldSendStatusCallback(call, newStatus) {
 		go e.sendStatusCallback(call)
 	}
+}
+
+// shouldSendStatusCallback checks if the status callback should be sent for this event
+func (e *EngineImpl) shouldSendStatusCallback(call *model.Call, status model.CallStatus) bool {
+	// If no events specified, send for all status changes (default behavior)
+	if len(call.StatusCallbackEvents) == 0 {
+		return true
+	}
+
+	// Check if this status is in the requested events list
+	statusStr := string(status)
+	for _, event := range call.StatusCallbackEvents {
+		if event == statusStr {
+			return true
+		}
+	}
+
+	return false
 }
 
 // sendStatusCallback posts to the status callback URL

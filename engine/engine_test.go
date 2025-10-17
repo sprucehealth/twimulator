@@ -625,8 +625,8 @@ func TestUpdateCall(t *testing.T) {
 	if !ok {
 		t.Fatalf("call %s not found after update", call.SID)
 	}
-	if got.AnswerURL != "http://test/new-answer" {
-		t.Fatalf("expected answer URL updated, got %s", got.AnswerURL)
+	if got.Url != "http://test/new-answer" {
+		t.Fatalf("expected answer URL updated, got %s", got.Url)
 	}
 	if got.StatusCallback != "http://test/status" {
 		t.Fatalf("expected status callback updated, got %s", got.StatusCallback)

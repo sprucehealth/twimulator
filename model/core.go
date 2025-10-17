@@ -43,21 +43,22 @@ const (
 
 // Call represents a voice call
 type Call struct {
-	SID             SID               `json:"sid"`
-	AccountSID      SID               `json:"account_sid"`
-	From            string            `json:"from"`
-	To              string            `json:"to"`
-	Direction       Direction         `json:"direction"`
-	Status          CallStatus        `json:"status"`
-	StartAt         time.Time         `json:"start_at"`
-	AnsweredAt      *time.Time        `json:"answered_at,omitempty"`
-	EndedAt         *time.Time        `json:"ended_at,omitempty"`
-	ParentCallSID   *SID              `json:"parent_call_sid,omitempty"`
-	CurrentEndpoint string            `json:"current_endpoint"` // "queue:{name}", "conference:{name}", "gather", ""
-	Timeline        []Event           `json:"timeline"`
-	Variables       map[string]string `json:"variables"`
-	AnswerURL       string            `json:"answer_url"`
-	StatusCallback  string            `json:"status_callback,omitempty"`
+	SID                  SID               `json:"sid"`
+	AccountSID           SID               `json:"account_sid"`
+	From                 string            `json:"from"`
+	To                   string            `json:"to"`
+	Direction            Direction         `json:"direction"`
+	Status               CallStatus        `json:"status"`
+	StartAt              time.Time         `json:"start_at"`
+	AnsweredAt           *time.Time        `json:"answered_at,omitempty"`
+	EndedAt              *time.Time        `json:"ended_at,omitempty"`
+	ParentCallSID        *SID              `json:"parent_call_sid,omitempty"`
+	CurrentEndpoint      string            `json:"current_endpoint"` // "queue:{name}", "conference:{name}", "gather", ""
+	Timeline             []Event           `json:"timeline"`
+	Variables            map[string]string `json:"variables"`
+	Url                  string            `json:"url"`
+	StatusCallback       string            `json:"status_callback,omitempty"`
+	StatusCallbackEvents []string          `json:"status_callback_events,omitempty"` // Events to trigger callbacks for
 }
 
 // Queue represents a call queue
@@ -111,10 +112,10 @@ type SubAccount struct {
 
 // IncomingNumber represents a provisioned phone number
 type IncomingNumber struct {
-	SID                 string     `json:"sid"`
-	PhoneNumber         string     `json:"phone_number"`
-	VoiceApplicationSID *string    `json:"voice_application_sid,omitempty"`
-	CreatedAt           time.Time  `json:"created_at"`
+	SID                 string    `json:"sid"`
+	PhoneNumber         string    `json:"phone_number"`
+	VoiceApplicationSID *string   `json:"voice_application_sid,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 // Application represents a Twilio application tied to a subaccount
