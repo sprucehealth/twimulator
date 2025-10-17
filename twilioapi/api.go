@@ -82,6 +82,11 @@ func (c *Client) UpdateConference(sid string, params *twilioopenapi.UpdateConfer
 	return c.engine.UpdateConference(sid, params)
 }
 
+// FetchParticipant retrieves a participant from a conference
+func (c *Client) FetchParticipant(conferenceSid string, callSid string, params *twilioopenapi.FetchParticipantParams) (*twilioopenapi.ApiV2010Participant, error) {
+	return c.engine.FetchParticipant(conferenceSid, callSid, params)
+}
+
 // HangupCall terminates a call
 func (c *Client) HangupCall(sid string) error {
 	return c.engine.Hangup(model.SID(sid))

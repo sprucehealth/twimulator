@@ -38,6 +38,7 @@ type Engine interface {
 	FetchConference(sid string, params *twilioopenapi.FetchConferenceParams) (*twilioopenapi.ApiV2010Conference, error)
 	ListConference(params *twilioopenapi.ListConferenceParams) ([]twilioopenapi.ApiV2010Conference, error)
 	UpdateConference(sid string, params *twilioopenapi.UpdateConferenceParams) (*twilioopenapi.ApiV2010Conference, error)
+	FetchParticipant(conferenceSid string, callSid string, params *twilioopenapi.FetchParticipantParams) (*twilioopenapi.ApiV2010Participant, error)
 	ListCalls(filter CallFilter) []*model.Call
 	GetQueue(accountSID model.SID, name string) (*model.Queue, bool)
 	GetConference(accountSID model.SID, name string) (*model.Conference, bool)
@@ -883,6 +884,53 @@ func (e *EngineImpl) UpdateConference(sid string, params *twilioopenapi.UpdateCo
 	return &twilioopenapi.ApiV2010Conference{
 		Sid:    &sidStr,
 		Status: &status,
+	}, nil
+}
+
+// FetchParticipant retrieves a participant from a conference
+func (e *EngineImpl) FetchParticipant(conferenceSid string, callSid string, _ *twilioopenapi.FetchParticipantParams) (*twilioopenapi.ApiV2010Participant, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	// Search all subaccounts for the conference
+	var conf *model.Conference
+	for _, confs := range e.conferences {
+		for _, c := range confs {
+			if string(c.SID) == conferenceSid {
+				conf = c
+				break
+			}
+		}
+		if conf != nil {
+			break
+		}
+	}
+
+	if conf == nil {
+		return nil, fmt.Errorf("conference %s not found", conferenceSid)
+	}
+
+	// Check if the call is a participant in this conference
+	callSIDModel := model.SID(callSid)
+	isParticipant := false
+	for _, participantSID := range conf.Participants {
+		if participantSID == callSIDModel {
+			isParticipant = true
+			break
+		}
+	}
+
+	if !isParticipant {
+		return nil, fmt.Errorf("call %s is not a participant in conference %s", callSid, conferenceSid)
+	}
+
+	// Return participant with CallSid and ConferenceSid
+	callSidStr := callSid
+	conferenceSidStr := conferenceSid
+
+	return &twilioopenapi.ApiV2010Participant{
+		CallSid:       &callSidStr,
+		ConferenceSid: &conferenceSidStr,
 	}, nil
 }
 
