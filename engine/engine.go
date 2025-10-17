@@ -40,6 +40,7 @@ type Engine interface {
 	UpdateConference(sid string, params *twilioopenapi.UpdateConferenceParams) (*twilioopenapi.ApiV2010Conference, error)
 	FetchParticipant(conferenceSid string, callSid string, params *twilioopenapi.FetchParticipantParams) (*twilioopenapi.ApiV2010Participant, error)
 	UpdateParticipant(conferenceSid string, callSid string, params *twilioopenapi.UpdateParticipantParams) (*twilioopenapi.ApiV2010Participant, error)
+	FetchRecording(sid string, params *twilioopenapi.FetchRecordingParams) (*twilioopenapi.ApiV2010Recording, error)
 	ListCalls(filter CallFilter) []*model.Call
 	GetQueue(accountSID model.SID, name string) (*model.Queue, bool)
 	GetConference(accountSID model.SID, name string) (*model.Conference, bool)
@@ -1049,6 +1050,17 @@ func (e *EngineImpl) UpdateParticipant(conferenceSid string, callSid string, par
 	return &twilioopenapi.ApiV2010Participant{
 		CallSid:       &callSidStr,
 		ConferenceSid: &conferenceSidStr,
+	}, nil
+}
+
+// FetchRecording returns a recording with status "absent" (recordings not implemented)
+func (e *EngineImpl) FetchRecording(sid string, _ *twilioopenapi.FetchRecordingParams) (*twilioopenapi.ApiV2010Recording, error) {
+	sidStr := sid
+	status := "absent"
+
+	return &twilioopenapi.ApiV2010Recording{
+		Sid:    &sidStr,
+		Status: &status,
 	}, nil
 }
 
