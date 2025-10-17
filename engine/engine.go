@@ -35,6 +35,7 @@ type Engine interface {
 
 	// Introspection
 	FetchCall(sid string, params *twilioopenapi.FetchCallParams) (*twilioopenapi.ApiV2010Call, error)
+	FetchConference(sid string, params *twilioopenapi.FetchConferenceParams) (*twilioopenapi.ApiV2010Conference, error)
 	ListCalls(filter CallFilter) []*model.Call
 	GetQueue(accountSID model.SID, name string) (*model.Queue, bool)
 	GetConference(accountSID model.SID, name string) (*model.Conference, bool)
@@ -756,6 +757,29 @@ func (e *EngineImpl) FetchCall(sid string, _ *twilioopenapi.FetchCallParams) (*t
 		return nil, fmt.Errorf("call %s not found", sid)
 	}
 	return buildAPICallResponse(call, e.apiVersion), nil
+}
+
+// FetchConference returns a Twilio-style conference response by SID
+func (e *EngineImpl) FetchConference(sid string, _ *twilioopenapi.FetchConferenceParams) (*twilioopenapi.ApiV2010Conference, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	// Search all subaccounts for a conference with this SID
+	for _, confs := range e.conferences {
+		for _, conf := range confs {
+			if string(conf.SID) == sid {
+				sidStr := string(conf.SID)
+				status := string(conf.Status)
+
+				return &twilioopenapi.ApiV2010Conference{
+					Sid:    &sidStr,
+					Status: &status,
+				}, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("conference %s not found", sid)
 }
 
 // GetCallState exposes the internal call model for inspection (tests, console)
