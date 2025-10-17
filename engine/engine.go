@@ -341,7 +341,7 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		From:                 from,
 		To:                   to,
 		Direction:            model.Outbound,
-		Status:               model.CallQueued,
+		Status:               model.CallInitiated,
 		StartAt:              now,
 		Timeline:             []model.Event{},
 		Variables:            make(map[string]string),

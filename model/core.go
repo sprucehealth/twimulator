@@ -22,6 +22,9 @@ const (
 	CallBusy       CallStatus = "busy"
 	CallFailed     CallStatus = "failed"
 	CallNoAnswer   CallStatus = "no-answer"
+	CallCanceled   CallStatus = "canceled"
+	CallAnswered   CallStatus = "answered"
+	CallInitiated  CallStatus = "initiated"
 )
 
 // Direction represents whether a call is inbound or outbound

@@ -6,7 +6,8 @@
       "Bash(go build:*)",
       "Bash(curl:*)",
       "Bash(git add:*)",
-      "Bash(go run:*)"
+      "Bash(go run:*)",
+      "WebFetch(domain:www.twilio.com)"
     ],
     "deny": [],
     "ask": []

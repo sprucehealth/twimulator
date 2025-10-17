@@ -63,7 +63,10 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 
 	// Give goroutines time to start
 	time.Sleep(10 * time.Millisecond)
-
+	err := e.AnswerCall(c1.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Advance until answered and enqueued
 	e.Advance(3 * time.Second)
 	time.Sleep(10 * time.Millisecond) // Let goroutines process
@@ -91,6 +94,10 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	c2 := mustCreateCall(t, e, params2)
 
 	time.Sleep(10 * time.Millisecond)
+	err = e.AnswerCall(c2.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.Advance(5 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 
@@ -106,8 +113,14 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	}
 
 	// Cleanup
-	e.Hangup(c1.SID)
-	e.Hangup(c2.SID)
+	err = e.Hangup(c1.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = e.Hangup(c2.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.Advance(1 * time.Second)
 
 	// Assert completed
@@ -170,16 +183,22 @@ func TestGatherWithDigits(t *testing.T) {
 
 	// Give goroutines time to start
 	time.Sleep(10 * time.Millisecond)
-
+	err := e.AnswerCall(call.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Advance to answer
 	e.Advance(1 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 
 	// Send digits while in gather
-	e.SendDigits(call.SID, "1")
-
+	err = e.SendDigits(call.SID, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Advance to process gather
 	e.Advance(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	if !gatherActionCalled {
 		t.Error("Gather action was not called")
@@ -221,10 +240,14 @@ func TestGatherTimeout(t *testing.T) {
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
-
+	err := e.AnswerCall(call.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Advance past gather timeout
-	e.Advance(5 * time.Second)
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+	e.Advance(10 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	// Should have timed out and hung up
 	got, _ := e.GetCallState(call.SID)
@@ -279,6 +302,10 @@ func TestRedirect(t *testing.T) {
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
+	err := e.AnswerCall(call.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.Advance(2 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 
@@ -316,6 +343,15 @@ func TestConference(t *testing.T) {
 	call2 := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+3333", "+4444", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
+	err := e.AnswerCall(call1.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	err = e.AnswerCall(call2.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.Advance(2 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 
@@ -451,7 +487,7 @@ func TestListCallsFilter(t *testing.T) {
 	mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1111", "+2222", "http://test/answer"))
 	mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+3333", "+2222", "http://test/answer"))
 	mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1111", "+4444", "http://test/answer"))
-
+	time.Sleep(10 * time.Millisecond)
 	// Filter by To
 	calls := e.ListCalls(engine.CallFilter{To: "+2222"})
 	if len(calls) != 2 {
@@ -465,7 +501,7 @@ func TestListCallsFilter(t *testing.T) {
 	}
 
 	// Filter by Status
-	status := model.CallQueued
+	status := model.CallRinging
 	calls = e.ListCalls(engine.CallFilter{Status: &status})
 	if len(calls) != 3 {
 		t.Errorf("Expected 3 queued calls, got %d", len(calls))

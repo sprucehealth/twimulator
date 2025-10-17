@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -11,6 +12,9 @@ import (
 	"twimulator/twiml"
 )
 
+// ErrCallHungup is returned when a Hangup verb is executed
+var ErrCallHungup = errors.New("call hungup via Hangup verb")
+
 // CallRunner executes TwiML for a call
 type CallRunner struct {
 	call    *model.Call
@@ -18,26 +22,28 @@ type CallRunner struct {
 	timeout time.Duration
 
 	// State for gather
-	gatherCh chan string
-	hangupCh chan struct{}
-	answerCh chan struct{}
-	busyCh   chan struct{}
-	failedCh chan struct{}
-	done     chan struct{}
+	gatherCh  chan string
+	hangupCh  chan struct{}
+	answerCh  chan struct{}
+	busyCh    chan struct{}
+	failedCh  chan struct{}
+	dequeueCh chan string // for explicit dequeue with result
+	done      chan struct{}
 }
 
 // NewCallRunner creates a new call runner
 func NewCallRunner(call *model.Call, engine *EngineImpl, timeout time.Duration) *CallRunner {
 	return &CallRunner{
-		call:     call,
-		engine:   engine,
-		timeout:  timeout,
-		gatherCh: make(chan string, 1),
-		hangupCh: make(chan struct{}, 1),
-		answerCh: make(chan struct{}, 1),
-		busyCh:   make(chan struct{}, 1),
-		failedCh: make(chan struct{}, 1),
-		done:     make(chan struct{}),
+		call:      call,
+		engine:    engine,
+		timeout:   timeout,
+		gatherCh:  make(chan string, 1),
+		hangupCh:  make(chan struct{}, 1),
+		answerCh:  make(chan struct{}, 1),
+		busyCh:    make(chan struct{}, 1),
+		failedCh:  make(chan struct{}, 1),
+		dequeueCh: make(chan string, 1),
+		done:      make(chan struct{}),
 	}
 }
 
@@ -87,17 +93,29 @@ func (r *CallRunner) answer(ctx context.Context) {
 
 	// Execute TwiML
 	if err := r.executeTwiML(ctx, twimlResp); err != nil {
+		// Check if this is a normal hangup or an actual error
+		if errors.Is(err, ErrCallHungup) {
+			// Normal hangup via <Hangup/> verb - call already completed by executeHangup
+			return
+		}
+		// Actual error - mark call as failed
 		log.Printf("TwiML execution error for call %s: %v", r.call.SID, err)
 		r.updateStatus(model.CallFailed)
 		return
 	}
 
-	// Call completed normally
-	r.updateStatus(model.CallCompleted)
-	now = r.engine.clock.Now()
-	r.engine.mu.Lock()
-	r.call.EndedAt = &now
-	r.engine.mu.Unlock()
+	// TwiML execution completed, wait for hangup
+	select {
+	case <-ctx.Done():
+		return
+	case <-r.hangupCh:
+		r.updateStatus(model.CallCompleted)
+		now := r.engine.clock.Now()
+		r.engine.mu.Lock()
+		r.call.EndedAt = &now
+		r.engine.mu.Unlock()
+		return
+	}
 }
 
 func (r *CallRunner) fetchTwiML(ctx context.Context, targetURL string, form url.Values) (*twiml.Response, error) {
@@ -259,18 +277,11 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather) er
 	r.call.Variables["Digits"] = digits
 	r.engine.mu.Unlock()
 
-	// If action URL specified, fetch and execute
-	if gather.Action != "" {
-		form := url.Values{}
-		form.Set("Digits", digits)
-		resp, err := r.fetchTwiML(ctx, gather.Action, form)
-		if err != nil {
-			return err
-		}
-		return r.executeTwiML(ctx, resp)
-	}
+	// Call action callback with gathered digits
+	form := url.Values{}
+	form.Set("Digits", digits)
 
-	return nil
+	return r.executeActionCallback(ctx, gather.Action, form)
 }
 
 func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial) error {
@@ -299,11 +310,105 @@ func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial) error {
 func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial) error {
 	r.engine.mu.Lock()
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, dial.Queue)
+	queueSID := queue.SID
 
+	// Check if there are waiting members to connect to
+	var targetCallSID model.SID
+	if len(queue.Members) > 0 {
+		// Get the first waiting caller (FIFO)
+		targetCallSID = queue.Members[0]
+	}
+	r.engine.mu.Unlock()
+
+	// Two scenarios:
+	// 1. If there's a waiting caller, bridge with them
+	// 2. If no waiting caller, join queue and wait for one
+
+	if targetCallSID != "" {
+		// Scenario 1: Bridge with waiting caller
+		return r.bridgeWithQueueMember(ctx, dial, queue, queueSID, targetCallSID)
+	}
+
+	// Scenario 2: No waiting callers, join queue and wait
+	return r.waitInDialQueue(ctx, dial, queue, queueSID)
+}
+
+// bridgeWithQueueMember connects this call to a waiting queue member
+func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial, queue *model.Queue, queueSID model.SID, targetCallSID model.SID) error {
+	startTime := r.engine.clock.Now()
+
+	r.addEvent("dial.queue.bridging", map[string]any{
+		"queue":           dial.Queue,
+		"target_call_sid": targetCallSID,
+	})
+
+	// Get the target call's runner to dequeue it
+	r.engine.mu.Lock()
+	targetRunner := r.engine.runners[targetCallSID]
+	targetCall := r.engine.calls[targetCallSID]
+
+	// Calculate how long target was in queue
+	var targetQueueStart time.Time
+	for _, event := range targetCall.Timeline {
+		if event.Type == "enqueued" || event.Type == "dial.queue.joined" {
+			targetQueueStart = event.Time
+			break
+		}
+	}
+	r.engine.mu.Unlock()
+
+	// Signal the target call to dequeue with "bridged" result
+	if targetRunner != nil {
+		select {
+		case targetRunner.dequeueCh <- "bridged":
+		default:
+		}
+	}
+
+	// Simulate bridge duration - wait until either call hangs up
+	dialDuration := 0
+	select {
+	case <-ctx.Done():
+	case <-r.hangupCh:
+	case <-r.engine.clock.After(dial.Timeout):
+		// Bridge timeout
+		dialDuration = int(dial.Timeout.Seconds())
+	}
+
+	endTime := r.engine.clock.Now()
+	dialDuration = int(endTime.Sub(startTime).Seconds())
+	targetQueueTime := 0
+	if !targetQueueStart.IsZero() {
+		targetQueueTime = int(startTime.Sub(targetQueueStart).Seconds())
+	}
+
+	r.addEvent("dial.queue.bridged", map[string]any{
+		"queue":             dial.Queue,
+		"target_call_sid":   targetCallSID,
+		"dial_duration":     dialDuration,
+		"target_queue_time": targetQueueTime,
+	})
+
+	// Call action callback with bridge results
+	form := url.Values{}
+	form.Set("DialCallStatus", "completed")
+	form.Set("DialCallDuration", fmt.Sprintf("%d", dialDuration))
+	form.Set("QueueResult", "bridged")
+	form.Set("QueueSid", string(queueSID))
+	form.Set("QueueTime", fmt.Sprintf("%d", targetQueueTime))
+
+	return r.executeActionCallback(ctx, dial.Action, form)
+}
+
+// waitInDialQueue waits in queue when no members are available
+func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queue *model.Queue, queueSID model.SID) error {
+	startTime := r.engine.clock.Now()
+
+	r.engine.mu.Lock()
 	// Add this call to the queue
 	queue.Members = append(queue.Members, r.call.SID)
 	queue.Timeline = append(queue.Timeline, model.NewEvent(
-		r.engine.clock.Now(),
+		startTime,
 		"member.joined",
 		map[string]any{"call_sid": r.call.SID},
 	))
@@ -311,26 +416,55 @@ func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial) err
 	r.call.CurrentEndpoint = "queue:" + dial.Queue
 	r.engine.mu.Unlock()
 
-	r.addEvent("joined.queue", map[string]any{"queue": dial.Queue})
+	r.addEvent("dial.queue.joined", map[string]any{
+		"queue":     dial.Queue,
+		"queue_sid": queueSID,
+	})
 
-	// In a real scenario, we'd wait for another call to dial this queue
-	// For now, simulate waiting
+	// Dial Queue has a timeout (unlike Enqueue which waits indefinitely)
+	// Wait for dequeue, timeout, or hangup
+	dialStatus := ""
+	queueResult := ""
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		dialStatus = "canceled"
+		queueResult = "system-shutdown"
 	case <-r.hangupCh:
-		return nil
+		dialStatus = "canceled"
+		queueResult = "hangup"
+	case result := <-r.dequeueCh:
+		dialStatus = "completed"
+		queueResult = result
 	case <-r.engine.clock.After(dial.Timeout):
-		// Timeout waiting in queue
-		r.addEvent("queue.timeout", map[string]any{})
-
-		r.engine.mu.Lock()
-		r.removeFromQueue(queue)
-		r.call.CurrentEndpoint = ""
-		r.engine.mu.Unlock()
+		dialStatus = "no-answer"
+		queueResult = "timeout"
+		r.addEvent("dial.queue.timeout", map[string]any{})
 	}
 
-	return nil
+	// Calculate time in queue
+	r.engine.mu.Lock()
+	endTime := r.engine.clock.Now()
+	queueTime := int(endTime.Sub(startTime).Seconds())
+	r.removeFromQueue(queue)
+	r.call.CurrentEndpoint = ""
+	r.engine.mu.Unlock()
+
+	r.addEvent("dial.queue.left", map[string]any{
+		"queue":        dial.Queue,
+		"dial_status":  dialStatus,
+		"queue_result": queueResult,
+		"queue_time":   queueTime,
+	})
+
+	// Call action callback with dial results
+	form := url.Values{}
+	form.Set("DialCallStatus", dialStatus)
+	form.Set("DialCallDuration", "0") // Duration of the dialed leg (0 for queue timeout)
+	form.Set("QueueResult", queueResult)
+	form.Set("QueueSid", string(queueSID))
+	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
+
+	return r.executeActionCallback(ctx, dial.Action, form)
 }
 
 func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial) error {
@@ -401,13 +535,138 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial) er
 }
 
 func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue) error {
-	// Enqueue is essentially Dial Queue
-	dial := &twiml.Dial{
-		Queue:  enqueue.Name,
-		Action: enqueue.Action,
-		Method: enqueue.Method,
+	r.engine.mu.Lock()
+	queue := r.engine.getOrCreateQueue(r.call.AccountSID, enqueue.Name)
+	queueSID := queue.SID
+
+	// Check if there are waiting agents (from Dial Queue) to connect to
+	var targetCallSID model.SID
+	if len(queue.Members) > 0 {
+		// Get the first waiting agent (FIFO)
+		targetCallSID = queue.Members[0]
 	}
-	return r.executeDialQueue(ctx, dial)
+	r.engine.mu.Unlock()
+
+	// Two scenarios:
+	// 1. If there's a waiting agent, bridge with them immediately
+	// 2. If no waiting agent, enqueue and wait indefinitely
+
+	if targetCallSID != "" {
+		// Scenario 1: Bridge with waiting agent immediately
+		return r.bridgeEnqueueWithAgent(ctx, enqueue, queueSID, targetCallSID)
+	}
+
+	// Scenario 2: No waiting agents, enqueue and wait
+	return r.waitInEnqueue(ctx, enqueue, queueSID)
+}
+
+// bridgeEnqueueWithAgent connects this enqueued call to a waiting agent
+func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.Enqueue, queueSID model.SID, agentCallSID model.SID) error {
+	startTime := r.engine.clock.Now()
+
+	r.addEvent("enqueue.bridging", map[string]any{
+		"queue":          enqueue.Name,
+		"agent_call_sid": agentCallSID,
+	})
+
+	// Get the agent call's runner to dequeue it
+	r.engine.mu.Lock()
+	agentRunner := r.engine.runners[agentCallSID]
+	r.engine.mu.Unlock()
+
+	// Signal the agent call to dequeue with "bridged" result
+	if agentRunner != nil {
+		select {
+		case agentRunner.dequeueCh <- "bridged":
+		default:
+		}
+	}
+
+	// Simulate bridge - wait for hangup (no timeout for enqueued callers)
+	select {
+	case <-ctx.Done():
+	case <-r.hangupCh:
+	}
+
+	endTime := r.engine.clock.Now()
+	queueTime := int(endTime.Sub(startTime).Seconds())
+
+	r.addEvent("enqueue.bridged", map[string]any{
+		"queue":          enqueue.Name,
+		"agent_call_sid": agentCallSID,
+		"queue_time":     queueTime,
+	})
+
+	// Call action callback with bridge results
+	form := url.Values{}
+	form.Set("QueueResult", "bridged")
+	form.Set("QueueSid", string(queueSID))
+	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
+
+	return r.executeActionCallback(ctx, enqueue.Action, form)
+}
+
+// waitInEnqueue waits in queue when no agents are available
+func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, queueSID model.SID) error {
+	startTime := r.engine.clock.Now()
+
+	r.engine.mu.Lock()
+	queue := r.engine.getOrCreateQueue(r.call.AccountSID, enqueue.Name)
+
+	// Add this call to the queue
+	queue.Members = append(queue.Members, r.call.SID)
+	queue.Timeline = append(queue.Timeline, model.NewEvent(
+		startTime,
+		"member.enqueued",
+		map[string]any{"call_sid": r.call.SID},
+	))
+
+	r.call.CurrentEndpoint = "queue:" + enqueue.Name
+	r.engine.mu.Unlock()
+
+	r.addEvent("enqueued", map[string]any{
+		"queue":     enqueue.Name,
+		"queue_sid": queueSID,
+		"wait_url":  enqueue.WaitURL,
+		"action":    enqueue.Action,
+	})
+
+	// Wait indefinitely - no timeout for Enqueue (unlike Dial Queue)
+	// The call stays in queue until:
+	// 1. Another call dials the queue and bridges
+	// 2. Caller hangs up
+	// 3. Context is cancelled
+	queueResult := ""
+	select {
+	case <-ctx.Done():
+		queueResult = "system-shutdown"
+	case <-r.hangupCh:
+		queueResult = "hangup"
+	case result := <-r.dequeueCh:
+		queueResult = result
+	}
+
+	// Calculate time in queue
+	r.engine.mu.Lock()
+	endTime := r.engine.clock.Now()
+	queueTime := int(endTime.Sub(startTime).Seconds())
+	r.removeFromQueue(queue)
+	r.call.CurrentEndpoint = ""
+	r.engine.mu.Unlock()
+
+	r.addEvent("dequeued", map[string]any{
+		"queue":        enqueue.Name,
+		"queue_result": queueResult,
+		"queue_time":   queueTime,
+	})
+
+	// Call action callback with queue results
+	form := url.Values{}
+	form.Set("QueueResult", queueResult)
+	form.Set("QueueSid", string(queueSID))
+	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
+
+	return r.executeActionCallback(ctx, enqueue.Action, form)
 }
 
 func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redirect) error {
@@ -428,7 +687,11 @@ func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redire
 func (r *CallRunner) executeHangup() error {
 	r.addEvent("twiml.hangup", map[string]any{})
 	r.updateStatus(model.CallCompleted)
-	return fmt.Errorf("call hungup") // Signal to stop execution
+	now := r.engine.clock.Now()
+	r.engine.mu.Lock()
+	r.call.EndedAt = &now
+	r.engine.mu.Unlock()
+	return ErrCallHungup // Signal to stop execution
 }
 
 // Hangup signals the runner to hang up
@@ -482,6 +745,19 @@ func (r *CallRunner) buildCallForm() url.Values {
 	}
 
 	return form
+}
+
+// executeActionCallback calls an action URL with the provided form parameters
+func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string, form url.Values) error {
+	if actionURL == "" {
+		return nil
+	}
+
+	resp, err := r.fetchTwiML(ctx, actionURL, form)
+	if err != nil {
+		return err
+	}
+	return r.executeTwiML(ctx, resp)
 }
 
 func (r *CallRunner) removeFromQueue(queue *model.Queue) {
