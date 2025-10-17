@@ -92,9 +92,10 @@ type EngineImpl struct {
 type EngineOption func(*EngineImpl)
 
 type incomingNumber struct {
-	SID         model.SID
-	PhoneNumber string
-	CreatedAt   time.Time
+	SID              model.SID
+	PhoneNumber      string
+	VoiceApplication *model.SID
+	CreatedAt        time.Time
 }
 
 type applicationRecord struct {
@@ -412,25 +413,54 @@ func (e *EngineImpl) CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncom
 		return nil, fmt.Errorf("phone number %s already exists", phone)
 	}
 
+	var voiceAppSID *model.SID
+	appValue := ""
+	if params.VoiceApplicationSid != nil && *params.VoiceApplicationSid != "" {
+		appSID := model.SID(*params.VoiceApplicationSid)
+		if apps := e.applications[accountSIDModel]; apps == nil || apps[appSID] == nil {
+			return nil, fmt.Errorf("application %s not found for account %s", appSID, accountSID)
+		}
+		voiceAppSID = &appSID
+		appValue = string(appSID)
+	}
+
 	now := e.clock.Now()
 	sid := model.NewPhoneNumberSID()
 	record := &incomingNumber{
-		SID:         sid,
-		PhoneNumber: phone,
-		CreatedAt:   now,
+		SID:              sid,
+		PhoneNumber:      phone,
+		VoiceApplication: voiceAppSID,
+		CreatedAt:        now,
 	}
 	numbers[phone] = record
-	subAccount.IncomingNumbers = append(subAccount.IncomingNumbers, phone)
+
+	var appStrPtr *string
+	if voiceAppSID != nil {
+		appCopy := appValue
+		appStrPtr = &appCopy
+	}
+
+	subAccount.IncomingNumbers = append(subAccount.IncomingNumbers, model.IncomingNumber{
+		SID:                 string(sid),
+		PhoneNumber:         phone,
+		VoiceApplicationSID: appStrPtr,
+		CreatedAt:           now,
+	})
 
 	phoneCopy := phone
 	sidStr := string(sid)
 	created := now.UTC().Format(time.RFC1123Z)
 
-	return &twilioopenapi.ApiV2010IncomingPhoneNumber{
+	resp := &twilioopenapi.ApiV2010IncomingPhoneNumber{
 		Sid:         &sidStr,
 		PhoneNumber: &phoneCopy,
 		DateCreated: &created,
-	}, nil
+	}
+	if voiceAppSID != nil {
+		appCopy := appValue
+		resp.VoiceApplicationSid = &appCopy
+	}
+	return resp, nil
 }
 
 // ListIncomingPhoneNumber returns provisioned numbers for an account
@@ -465,11 +495,16 @@ func (e *EngineImpl) ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingP
 		phoneCopy := phone
 		sidStr := string(rec.SID)
 		created := rec.CreatedAt.UTC().Format(time.RFC1123Z)
-		result = append(result, twilioopenapi.ApiV2010IncomingPhoneNumber{
+		entry := twilioopenapi.ApiV2010IncomingPhoneNumber{
 			Sid:         &sidStr,
 			PhoneNumber: &phoneCopy,
 			DateCreated: &created,
-		})
+		}
+		if rec.VoiceApplication != nil {
+			appCopy := string(*rec.VoiceApplication)
+			entry.VoiceApplicationSid = &appCopy
+		}
+		result = append(result, entry)
 	}
 
 	return result, nil
@@ -486,9 +521,9 @@ func (e *EngineImpl) DeleteIncomingPhoneNumber(sid string, _ *twilioopenapi.Dele
 				delete(numbers, phone)
 				sa := e.subAccounts[accountSID]
 				if sa != nil {
-					filtered := make([]string, 0, len(sa.IncomingNumbers))
+					filtered := make([]model.IncomingNumber, 0, len(sa.IncomingNumbers))
 					for _, n := range sa.IncomingNumbers {
-						if n != phone {
+						if n.PhoneNumber != phone {
 							filtered = append(filtered, n)
 						}
 					}
@@ -778,7 +813,7 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 	for sid, sa := range e.subAccounts {
 		saCopy := *sa
 		if sa.IncomingNumbers != nil {
-			saCopy.IncomingNumbers = append([]string{}, sa.IncomingNumbers...)
+			saCopy.IncomingNumbers = append([]model.IncomingNumber{}, sa.IncomingNumbers...)
 		}
 		if sa.Applications != nil {
 			apps := make([]model.Application, len(sa.Applications))

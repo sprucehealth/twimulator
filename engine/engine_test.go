@@ -576,6 +576,16 @@ func mustCreateCall(t *testing.T, e *engine.EngineImpl, params *twilioopenapi.Cr
 	return call
 }
 
+func mustProvisionNumberWithApp(t *testing.T, e *engine.EngineImpl, accountSID model.SID, number string, appSID string) {
+	t.Helper()
+	params := (&twilioopenapi.CreateIncomingPhoneNumberParams{}).
+		SetPathAccountSid(string(accountSID)).
+		SetPhoneNumber(number).
+		SetVoiceApplicationSid(appSID)
+	if _, err := e.CreateIncomingPhoneNumber(params); err != nil {
+		t.Fatalf("failed to provision number %s with app %s: %v", number, appSID, err)
+	}
+}
 func mustProvisionNumbers(t *testing.T, e *engine.EngineImpl, accountSID model.SID, numbers ...string) {
 	t.Helper()
 	for _, num := range numbers {
@@ -631,7 +641,18 @@ func TestListIncomingPhoneNumber(t *testing.T) {
 	defer e.Close()
 
 	subAccount := createTestSubAccount(t, e, "Test Account")
-	mustProvisionNumbers(t, e, subAccount.SID, "+1234", "+5678")
+	app, err := e.CreateApplication((&twilioopenapi.CreateApplicationParams{}).
+		SetPathAccountSid(string(subAccount.SID)).
+		SetFriendlyName("Routing App"))
+	if err != nil {
+		t.Fatalf("create application failed: %v", err)
+	}
+	if app.Sid == nil {
+		t.Fatal("expected application SID")
+	}
+
+	mustProvisionNumberWithApp(t, e, subAccount.SID, "+1234", *app.Sid)
+	mustProvisionNumbers(t, e, subAccount.SID, "+5678")
 
 	params := (&twilioopenapi.ListIncomingPhoneNumberParams{}).
 		SetPathAccountSid(string(subAccount.SID))
@@ -642,6 +663,12 @@ func TestListIncomingPhoneNumber(t *testing.T) {
 	}
 	if len(list) != 2 {
 		t.Fatalf("expected 2 numbers, got %d", len(list))
+	}
+	if list[0].VoiceApplicationSid == nil && list[1].VoiceApplicationSid != nil {
+		list[0], list[1] = list[1], list[0]
+	}
+	if list[0].VoiceApplicationSid == nil || *list[0].VoiceApplicationSid != *app.Sid {
+		t.Fatalf("expected voice application sid %s on number, got %v", *app.Sid, list[0].VoiceApplicationSid)
 	}
 
 	filtered, err := e.ListIncomingPhoneNumber((&twilioopenapi.ListIncomingPhoneNumberParams{}).
@@ -655,6 +682,9 @@ func TestListIncomingPhoneNumber(t *testing.T) {
 	}
 	if filtered[0].PhoneNumber == nil || *filtered[0].PhoneNumber != "+1234" {
 		t.Fatalf("expected number +1234, got %v", filtered[0].PhoneNumber)
+	}
+	if filtered[0].VoiceApplicationSid == nil || *filtered[0].VoiceApplicationSid != *app.Sid {
+		t.Fatalf("expected filtered number to reference app %s", *app.Sid)
 	}
 
 	numberSID := *list[0].Sid

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Number {{.Number.PhoneNumber}} - Twimulator Console</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Twimulator Console</h1>
+            <nav>
+                <a href="/">SubAccounts</a>
+                <a href="/api/snapshot" target="_blank">API Snapshot</a>
+            </nav>
+        </header>
+
+        <main>
+            <div class="breadcrumb">
+                <a href="/">SubAccounts</a> &raquo; {{.AccountName}} &raquo; {{.Number.PhoneNumber}}
+            </div>
+
+            <section class="resource-section">
+                <h2>Incoming Number Details</h2>
+                <div class="detail-grid">
+                    <div class="detail-item">
+                        <label>SID</label>
+                        <div>{{.Number.SID}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Phone Number</label>
+                        <div>{{.Number.PhoneNumber}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Created At</label>
+                        <div>{{.Number.CreatedAt.Format "2006-01-02 15:04:05 MST"}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Application</label>
+                        <div>
+                            {{if .Number.ApplicationSID}}
+                                <strong>{{if .Number.ApplicationName}}{{.Number.ApplicationName}}{{else}}{{.Number.ApplicationSID}}{{end}}</strong>
+                            {{else}}
+                                <em>None</em>
+                            {{end}}
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+</body>
+</html>

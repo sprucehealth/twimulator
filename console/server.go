@@ -35,10 +35,17 @@ type accountView struct {
 	Status       string
 	CreatedAt    time.Time
 	AuthToken    string
-	Numbers      []string
+	Numbers      []numberView
 	Applications []applicationView
 }
 
+type numberView struct {
+	SID             string
+	PhoneNumber     string
+	ApplicationSID  string
+	ApplicationName string
+	CreatedAt       time.Time
+}
 type applicationView struct {
 	SID                  string
 	FriendlyName         string
@@ -78,6 +85,7 @@ func NewConsoleServer(e engine.Engine, addr string) (*ConsoleServer, error) {
 	mux.HandleFunc("/", cs.handleSubAccounts)
 	mux.HandleFunc("/subaccounts/", cs.handleSubAccountDetail)
 	mux.HandleFunc("/calls/", cs.handleCallDetail)
+	mux.HandleFunc("/numbers/", cs.handleNumberDetail)
 	mux.HandleFunc("/api/snapshot", cs.handleSnapshot)
 	mux.Handle("/static/", http.FileServer(http.FS(content)))
 
@@ -120,10 +128,10 @@ func (cs *ConsoleServer) handleSubAccounts(w http.ResponseWriter, r *http.Reques
 	snap := cs.engine.Snapshot()
 	for i := range views {
 		if sa, ok := snap.SubAccounts[model.SID(views[i].SID)]; ok {
-			views[i].Numbers = append([]string{}, sa.IncomingNumbers...)
+			appLookup := make(map[string]applicationView, len(sa.Applications))
 			apps := make([]applicationView, len(sa.Applications))
 			for idx, app := range sa.Applications {
-				apps[idx] = applicationView{
+				viewApp := applicationView{
 					SID:                  app.SID,
 					FriendlyName:         app.FriendlyName,
 					VoiceURL:             app.VoiceURL,
@@ -132,8 +140,27 @@ func (cs *ConsoleServer) handleSubAccounts(w http.ResponseWriter, r *http.Reques
 					StatusCallbackMethod: app.StatusCallbackMethod,
 					CreatedAt:            app.CreatedAt,
 				}
+				apps[idx] = viewApp
+				appLookup[app.SID] = viewApp
 			}
 			views[i].Applications = apps
+
+			numbers := make([]numberView, len(sa.IncomingNumbers))
+			for idx, num := range sa.IncomingNumbers {
+				viewNum := numberView{
+					SID:         num.SID,
+					PhoneNumber: num.PhoneNumber,
+					CreatedAt:   num.CreatedAt,
+				}
+				if num.VoiceApplicationSID != nil {
+					viewNum.ApplicationSID = *num.VoiceApplicationSID
+					if appView, ok := appLookup[viewNum.ApplicationSID]; ok {
+						viewNum.ApplicationName = appView.FriendlyName
+					}
+				}
+				numbers[idx] = viewNum
+			}
+			views[i].Numbers = numbers
 		}
 	}
 
@@ -187,10 +214,10 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 		http.NotFound(w, r)
 		return
 	}
-	view.Numbers = append([]string{}, subAccountModel.IncomingNumbers...)
+	appLookup := make(map[string]applicationView, len(subAccountModel.Applications))
 	apps := make([]applicationView, len(subAccountModel.Applications))
 	for idx, app := range subAccountModel.Applications {
-		apps[idx] = applicationView{
+		viewApp := applicationView{
 			SID:                  app.SID,
 			FriendlyName:         app.FriendlyName,
 			VoiceURL:             app.VoiceURL,
@@ -199,8 +226,28 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 			StatusCallbackMethod: app.StatusCallbackMethod,
 			CreatedAt:            app.CreatedAt,
 		}
+		apps[idx] = viewApp
+		appLookup[app.SID] = viewApp
 	}
 	view.Applications = apps
+
+	numbers := make([]numberView, len(subAccountModel.IncomingNumbers))
+	for idx, num := range subAccountModel.IncomingNumbers {
+		viewNum := numberView{
+			SID:         num.SID,
+			PhoneNumber: num.PhoneNumber,
+			CreatedAt:   num.CreatedAt,
+		}
+		if num.VoiceApplicationSID != nil {
+			viewNum.ApplicationSID = *num.VoiceApplicationSID
+			if appView, ok := appLookup[viewNum.ApplicationSID]; ok {
+				viewNum.ApplicationName = appView.FriendlyName
+			}
+		}
+		numbers[idx] = viewNum
+	}
+
+	view.Numbers = numbers
 
 	// Filter calls by AccountSID
 	calls := make([]*model.Call, 0)
@@ -233,11 +280,13 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 	}
 
 	data := map[string]any{
-		"SubAccount":  view,
-		"Calls":       calls,
-		"Queues":      queues,
-		"Conferences": conferences,
-		"Timestamp":   snap.Timestamp,
+		"SubAccount":   view,
+		"Applications": view.Applications,
+		"Numbers":      numbers,
+		"Calls":        calls,
+		"Queues":       queues,
+		"Conferences":  conferences,
+		"Timestamp":    snap.Timestamp,
 	}
 
 	if err := cs.tmpl.ExecuteTemplate(w, "subaccount.html", data); err != nil {
@@ -298,4 +347,61 @@ func toAccountView(acct openapi.ApiV2010Account) accountView {
 		view.AuthToken = *acct.AuthToken
 	}
 	return view
+}
+
+func (cs *ConsoleServer) handleNumberDetail(w http.ResponseWriter, r *http.Request) {
+	sid := strings.TrimPrefix(r.URL.Path, "/numbers/")
+	if sid == "" {
+		http.Error(w, "Number SID required", http.StatusBadRequest)
+		return
+	}
+
+	snap := cs.engine.Snapshot()
+	var number numberView
+	var accountName string
+	found := false
+
+	for _, sa := range snap.SubAccounts {
+		appLookup := make(map[string]string, len(sa.Applications))
+		for _, app := range sa.Applications {
+			appLookup[app.SID] = app.FriendlyName
+		}
+
+		for _, num := range sa.IncomingNumbers {
+			if num.SID == sid {
+				number = numberView{
+					SID:         num.SID,
+					PhoneNumber: num.PhoneNumber,
+					CreatedAt:   num.CreatedAt,
+				}
+				if num.VoiceApplicationSID != nil {
+					number.ApplicationSID = *num.VoiceApplicationSID
+					if name, ok := appLookup[number.ApplicationSID]; ok {
+						number.ApplicationName = name
+					}
+				}
+				accountName = sa.FriendlyName
+				found = true
+				break
+			}
+		}
+
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+
+	data := map[string]any{
+		"Number":      number,
+		"AccountName": accountName,
+	}
+
+	if err := cs.tmpl.ExecuteTemplate(w, "number.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

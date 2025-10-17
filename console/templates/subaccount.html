@@ -36,57 +36,82 @@
                         <label>Created At</label>
                         <div>{{.SubAccount.CreatedAt.Format "2006-01-02 15:04:05 MST"}}</div>
                     </div>
-                    <div class="detail-item">
-                        <label>Incoming Numbers</label>
-                        <div class="number-list">
-                            {{if .SubAccount.Numbers}}
-                                {{range .SubAccount.Numbers}}
-                                    <span class="tag">{{.}}</span>
-                                {{end}}
-                            {{else}}
-                                <em>None</em>
-                            {{end}}
-                        </div>
-                    </div>
-                    <div class="detail-item">
-                        <label>Applications</label>
-                        <div class="number-list">
-                            {{if .SubAccount.Applications}}
-                                <table class="mini-table">
-                                    <thead>
-                                        <tr>
-                                            <th>SID</th>
-                                            <th>Name</th>
-                                            <th>Voice URL</th>
-                                            <th>Voice Method</th>
-                                            <th>Status Callback</th>
-                                            <th>Callback Method</th>
-                                            <th>Created</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {{range .SubAccount.Applications}}
-                                        <tr>
-                                            <td>{{.SID}}</td>
-                                            <td>{{if .FriendlyName}}{{.FriendlyName}}{{else}}&mdash;{{end}}</td>
-                                            <td>{{if .VoiceURL}}<a href="{{.VoiceURL}}" target="_blank">{{.VoiceURL}}</a>{{else}}&mdash;{{end}}</td>
-                                            <td>{{if .VoiceMethod}}{{.VoiceMethod}}{{else}}&mdash;{{end}}</td>
-                                            <td>{{if .StatusCallback}}{{.StatusCallback}}{{else}}&mdash;{{end}}</td>
-                                            <td>{{if .StatusCallbackMethod}}{{.StatusCallbackMethod}}{{else}}&mdash;{{end}}</td>
-                                            <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
-                                        </tr>
-                                        {{end}}
-                                    </tbody>
-                                </table>
-                            {{else}}
-                                <em>None</em>
-                            {{end}}
-                        </div>
-                    </div>
                 </div>
             </div>
 
             <div class="timestamp">Snapshot at: {{.Timestamp.Format "2006-01-02 15:04:05 MST"}}</div>
+
+            <!-- Incoming Numbers Section -->
+            <section class="resource-section">
+                <h3>Incoming Numbers</h3>
+                {{if .Numbers}}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>SID</th>
+                            <th>Number</th>
+                            <th>Application</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Numbers}}
+                        <tr>
+                            <td>{{.SID}}</td>
+                            <td><a href="/numbers/{{.SID}}">{{.PhoneNumber}}</a></td>
+                            <td>
+                                {{if .ApplicationName}}
+                                    {{.ApplicationName}}
+                                {{else if .ApplicationSID}}
+                                    {{.ApplicationSID}}
+                                {{else}}
+                                    &mdash;
+                                {{end}}
+                            </td>
+                            <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+                {{else}}
+                <p class="empty">No incoming numbers yet.</p>
+                {{end}}
+            </section>
+
+            <!-- Applications Section -->
+            <section class="resource-section">
+                <h3>Applications</h3>
+                {{if .Applications}}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>SID</th>
+                            <th>Name</th>
+                            <th>Voice URL</th>
+                            <th>Voice Method</th>
+                            <th>Status Callback</th>
+                            <th>Callback Method</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Applications}}
+                        <tr>
+                            <td>{{.SID}}</td>
+                            <td>{{if .FriendlyName}}{{.FriendlyName}}{{else}}&mdash;{{end}}</td>
+                            <td>{{if .VoiceURL}}<a href="{{.VoiceURL}}" target="_blank">{{.VoiceURL}}</a>{{else}}&mdash;{{end}}</td>
+                            <td>{{if .VoiceMethod}}{{.VoiceMethod}}{{else}}&mdash;{{end}}</td>
+                            <td>{{if .StatusCallback}}{{.StatusCallback}}{{else}}&mdash;{{end}}</td>
+                            <td>{{if .StatusCallbackMethod}}{{.StatusCallbackMethod}}{{else}}&mdash;{{end}}</td>
+                            <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+                {{else}}
+                <p class="empty">No applications yet.</p>
+                {{end}}
+            </section>
 
             <!-- Calls Section -->
             <section class="resource-section">

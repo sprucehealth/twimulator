@@ -90,13 +90,21 @@ type Event struct {
 
 // SubAccount represents a Twilio subaccount
 type SubAccount struct {
-	SID             SID           `json:"sid"`
-	FriendlyName    string        `json:"friendly_name"`
-	Status          string        `json:"status"` // "active", "suspended", "closed"
-	CreatedAt       time.Time     `json:"created_at"`
-	AuthToken       string        `json:"auth_token"`
-	IncomingNumbers []string      `json:"incoming_numbers"`
-	Applications    []Application `json:"applications"`
+	SID             SID              `json:"sid"`
+	FriendlyName    string           `json:"friendly_name"`
+	Status          string           `json:"status"` // "active", "suspended", "closed"
+	CreatedAt       time.Time        `json:"created_at"`
+	AuthToken       string           `json:"auth_token"`
+	IncomingNumbers []IncomingNumber `json:"incoming_numbers"`
+	Applications    []Application    `json:"applications"`
+}
+
+// IncomingNumber represents a provisioned phone number
+type IncomingNumber struct {
+	SID                 string     `json:"sid"`
+	PhoneNumber         string     `json:"phone_number"`
+	VoiceApplicationSID *string    `json:"voice_application_sid,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
 }
 
 // Application represents a Twilio application tied to a subaccount
