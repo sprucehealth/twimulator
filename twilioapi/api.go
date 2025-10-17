@@ -47,6 +47,11 @@ func (c *Client) CreateApplication(params *twilioopenapi.CreateApplicationParams
 	return c.engine.CreateApplication(params)
 }
 
+// CreateQueue creates a queue for an account
+func (c *Client) CreateQueue(params *twilioopenapi.CreateQueueParams) (*twilioopenapi.ApiV2010Queue, error) {
+	return c.engine.CreateQueue(params)
+}
+
 // CreateCall creates a new call via the engine using Twilio's generated params
 func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error) {
 	return c.engine.CreateCall(params)

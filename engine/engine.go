@@ -25,6 +25,7 @@ type Engine interface {
 	ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingPhoneNumberParams) ([]twilioopenapi.ApiV2010IncomingPhoneNumber, error)
 	DeleteIncomingPhoneNumber(sid string, params *twilioopenapi.DeleteIncomingPhoneNumberParams) error
 	CreateApplication(params *twilioopenapi.CreateApplicationParams) (*twilioopenapi.ApiV2010Application, error)
+	CreateQueue(params *twilioopenapi.CreateQueueParams) (*twilioopenapi.ApiV2010Queue, error)
 
 	// Core lifecycle
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
@@ -607,6 +608,47 @@ func (e *EngineImpl) CreateApplication(params *twilioopenapi.CreateApplicationPa
 		Sid:          &sidStr,
 		FriendlyName: &friendly,
 		DateCreated:  &dateCreated,
+	}, nil
+}
+
+// CreateQueue creates a queue for an account
+func (e *EngineImpl) CreateQueue(params *twilioopenapi.CreateQueueParams) (*twilioopenapi.ApiV2010Queue, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+	friendlyName := ""
+	if params.FriendlyName != nil {
+		friendlyName = *params.FriendlyName
+	}
+	if friendlyName == "" {
+		return nil, fmt.Errorf("FriendlyName is required")
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if _, exists := e.subAccounts[accountSID]; !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	// Check if queue with this name already exists
+	if queues, exists := e.queues[accountSID]; exists {
+		if _, found := queues[friendlyName]; found {
+			return nil, fmt.Errorf("queue %s already exists for account %s", friendlyName, accountSID)
+		}
+	}
+
+	// Create the queue
+	queue := e.getOrCreateQueue(accountSID, friendlyName)
+
+	sidStr := string(queue.SID)
+	accountSIDStr := string(accountSID)
+
+	return &twilioopenapi.ApiV2010Queue{
+		Sid:        &sidStr,
+		AccountSid: &accountSIDStr,
 	}, nil
 }
 
