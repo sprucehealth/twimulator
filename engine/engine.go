@@ -39,6 +39,7 @@ type Engine interface {
 	ListConference(params *twilioopenapi.ListConferenceParams) ([]twilioopenapi.ApiV2010Conference, error)
 	UpdateConference(sid string, params *twilioopenapi.UpdateConferenceParams) (*twilioopenapi.ApiV2010Conference, error)
 	FetchParticipant(conferenceSid string, callSid string, params *twilioopenapi.FetchParticipantParams) (*twilioopenapi.ApiV2010Participant, error)
+	UpdateParticipant(conferenceSid string, callSid string, params *twilioopenapi.UpdateParticipantParams) (*twilioopenapi.ApiV2010Participant, error)
 	ListCalls(filter CallFilter) []*model.Call
 	GetQueue(accountSID model.SID, name string) (*model.Queue, bool)
 	GetConference(accountSID model.SID, name string) (*model.Conference, bool)
@@ -85,6 +86,9 @@ type EngineImpl struct {
 	calls       map[model.SID]*model.Call                  // All calls across all subaccounts
 	queues      map[model.SID]map[string]*model.Queue      // subAccountSID -> queue name -> Queue
 	conferences map[model.SID]map[string]*model.Conference // subAccountSID -> conf name -> Conference
+
+	// Participant states scoped by (conferenceSID, callSID)
+	participantStates map[model.SID]map[model.SID]*model.ParticipantState // conferenceSID -> callSID -> ParticipantState
 
 	// Call runners
 	runners map[model.SID]*CallRunner
@@ -146,18 +150,19 @@ func NewEngine(opts ...EngineOption) *EngineImpl {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &EngineImpl{
-		clock:           NewManualClock(time.Time{}), // default to manual
-		webhook:         httpstub.NewDefaultWebhookClient(10 * time.Second),
-		apiVersion:      "2010-04-01",
-		subAccounts:     make(map[model.SID]*model.SubAccount),
-		incomingNumbers: make(map[model.SID]map[string]*incomingNumber),
-		applications:    make(map[model.SID]map[model.SID]*applicationRecord),
-		calls:           make(map[model.SID]*model.Call),
-		queues:          make(map[model.SID]map[string]*model.Queue),
-		conferences:     make(map[model.SID]map[string]*model.Conference),
-		runners:         make(map[model.SID]*CallRunner),
-		ctx:             ctx,
-		cancel:          cancel,
+		clock:             NewManualClock(time.Time{}), // default to manual
+		webhook:           httpstub.NewDefaultWebhookClient(10 * time.Second),
+		apiVersion:        "2010-04-01",
+		subAccounts:       make(map[model.SID]*model.SubAccount),
+		incomingNumbers:   make(map[model.SID]map[string]*incomingNumber),
+		applications:      make(map[model.SID]map[model.SID]*applicationRecord),
+		calls:             make(map[model.SID]*model.Call),
+		queues:            make(map[model.SID]map[string]*model.Queue),
+		conferences:       make(map[model.SID]map[string]*model.Conference),
+		participantStates: make(map[model.SID]map[model.SID]*model.ParticipantState),
+		runners:           make(map[model.SID]*CallRunner),
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 
 	for _, opt := range opts {
@@ -934,12 +939,137 @@ func (e *EngineImpl) FetchParticipant(conferenceSid string, callSid string, _ *t
 	}, nil
 }
 
+// UpdateParticipant updates a participant in a conference
+func (e *EngineImpl) UpdateParticipant(conferenceSid string, callSid string, params *twilioopenapi.UpdateParticipantParams) (*twilioopenapi.ApiV2010Participant, error) {
+	if params == nil {
+		return nil, fmt.Errorf("params is required")
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Search all subaccounts for the conference
+	var conf *model.Conference
+	for _, confs := range e.conferences {
+		for _, c := range confs {
+			if string(c.SID) == conferenceSid {
+				conf = c
+				break
+			}
+		}
+		if conf != nil {
+			break
+		}
+	}
+
+	if conf == nil {
+		return nil, fmt.Errorf("conference %s not found", conferenceSid)
+	}
+
+	// Check if the call is a participant in this conference
+	callSIDModel := model.SID(callSid)
+	isParticipant := false
+	for _, participantSID := range conf.Participants {
+		if participantSID == callSIDModel {
+			isParticipant = true
+			break
+		}
+	}
+
+	if !isParticipant {
+		return nil, fmt.Errorf("call %s is not a participant in conference %s", callSid, conferenceSid)
+	}
+
+	// Get the call for timeline events
+	call, exists := e.calls[callSIDModel]
+	if !exists {
+		return nil, fmt.Errorf("call %s not found", callSid)
+	}
+
+	// Get or create participant state for this (conference, call) pair
+	conferenceSIDModel := model.SID(conferenceSid)
+	if e.participantStates[conferenceSIDModel] == nil {
+		e.participantStates[conferenceSIDModel] = make(map[model.SID]*model.ParticipantState)
+	}
+
+	state := e.participantStates[conferenceSIDModel][callSIDModel]
+	if state == nil {
+		state = &model.ParticipantState{}
+		e.participantStates[conferenceSIDModel][callSIDModel] = state
+	}
+
+	// Update participant state
+	now := e.clock.Now()
+	updatedFields := make(map[string]any)
+
+	if params.Muted != nil {
+		state.Muted = *params.Muted
+		updatedFields["muted"] = *params.Muted
+	}
+
+	if params.Hold != nil {
+		state.Hold = *params.Hold
+		updatedFields["hold"] = *params.Hold
+	}
+
+	if params.HoldUrl != nil {
+		state.HoldUrl = *params.HoldUrl
+		updatedFields["hold_url"] = *params.HoldUrl
+	}
+
+	if params.HoldMethod != nil {
+		state.HoldMethod = *params.HoldMethod
+		updatedFields["hold_method"] = *params.HoldMethod
+	}
+
+	if params.AnnounceUrl != nil {
+		state.AnnounceUrl = *params.AnnounceUrl
+		updatedFields["announce_url"] = *params.AnnounceUrl
+	}
+
+	if params.AnnounceMethod != nil {
+		state.AnnounceMethod = *params.AnnounceMethod
+		updatedFields["announce_method"] = *params.AnnounceMethod
+	}
+
+	// Add timeline event to the call if any fields were updated
+	if len(updatedFields) > 0 {
+		updatedFields["conference_sid"] = conferenceSid
+		call.Timeline = append(call.Timeline, model.NewEvent(
+			now,
+			"participant.updated",
+			updatedFields,
+		))
+	}
+
+	// Return participant with CallSid and ConferenceSid
+	callSidStr := callSid
+	conferenceSidStr := conferenceSid
+
+	return &twilioopenapi.ApiV2010Participant{
+		CallSid:       &callSidStr,
+		ConferenceSid: &conferenceSidStr,
+	}, nil
+}
+
 // GetCallState exposes the internal call model for inspection (tests, console)
 func (e *EngineImpl) GetCallState(callSID model.SID) (*model.Call, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	call, exists := e.calls[callSID]
 	return call, exists
+}
+
+// GetParticipantState exposes the participant state for a specific call in a conference
+func (e *EngineImpl) GetParticipantState(conferenceSID model.SID, callSID model.SID) (*model.ParticipantState, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if states, exists := e.participantStates[conferenceSID]; exists {
+		state, found := states[callSID]
+		return state, found
+	}
+	return nil, false
 }
 
 // ListCalls returns all calls matching the filter

@@ -5,7 +5,8 @@
       "Bash(go test:*)",
       "Bash(go build:*)",
       "Bash(curl:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(go run:*)"
     ],
     "deny": [],
     "ask": []

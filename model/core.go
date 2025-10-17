@@ -81,6 +81,16 @@ type Conference struct {
 	EndedAt      *time.Time       `json:"ended_at,omitempty"`
 }
 
+// ParticipantState represents the state of a call within a specific conference
+type ParticipantState struct {
+	Muted          bool   `json:"muted"`
+	Hold           bool   `json:"hold"`
+	HoldUrl        string `json:"hold_url,omitempty"`
+	HoldMethod     string `json:"hold_method,omitempty"`
+	AnnounceUrl    string `json:"announce_url,omitempty"`
+	AnnounceMethod string `json:"announce_method,omitempty"`
+}
+
 // Event represents a timeline event for a call, queue, or conference
 type Event struct {
 	Time   time.Time      `json:"time"`
