@@ -63,6 +63,10 @@ func main() {
 	// Start a test HTTP server that serves TwiML
 	mux := http.NewServeMux()
 
+	// Create the test server first so we can reference its URL
+	testSrv := httptest.NewServer(mux)
+	defer testSrv.Close()
+
 	// Inbound call handler - enqueues caller
 	mux.HandleFunc("/voice/inbound", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Inbound call from %s to %s", r.FormValue("From"), r.FormValue("To"))
@@ -100,14 +104,14 @@ func main() {
 	mux.HandleFunc("/voice/gather", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Gather call from %s", r.FormValue("From"))
 		w.Header().Set("Content-Type", "text/xml")
-		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="dtmf" timeout="10" numDigits="1" action="http://localhost:8088/voice/gather-result">
+  <Gather input="dtmf" timeout="10" numDigits="1" action="%s/voice/gather-result">
     <Say>Press 1 for sales, 2 for support, or 3 for billing.</Say>
   </Gather>
   <Say>We did not receive your selection. Goodbye.</Say>
   <Hangup/>
-</Response>`)
+</Response>`, testSrv.URL)
 	})
 
 	mux.HandleFunc("/voice/gather-result", func(w http.ResponseWriter, r *http.Request) {
@@ -139,9 +143,6 @@ func main() {
 		log.Printf("Status callback: CallSid=%s Status=%s", r.FormValue("CallSid"), r.FormValue("CallStatus"))
 		w.WriteHeader(http.StatusOK)
 	})
-
-	testSrv := httptest.NewServer(mux)
-	defer testSrv.Close()
 
 	log.Printf("Test TwiML server running at %s", testSrv.URL)
 
@@ -206,12 +207,16 @@ func main() {
 		log.Printf("   Created call %s\n", call1.SID)
 
 		time.Sleep(2 * time.Second)
-
+		e.AnswerCall(call1.SID)
+		log.Printf("   Answered call %s\n", call1.SID)
+		time.Sleep(2 * time.Second)
 		log.Println("2. Creating agent call to handle queue...")
 		call2 := createCall(newCallParams("+15551234002", "+18005551001", testSrv.URL+"/voice/agent"))
 		log.Printf("   Created call %s\n", call2.SID)
-
 		time.Sleep(3 * time.Second)
+		e.AnswerCall(call2.SID)
+		log.Printf("   Answered call %s\n", call2.SID)
+		time.Sleep(2 * time.Second)
 
 		log.Println("3. Creating conference calls...")
 		for i := 1; i <= 3; i++ {
@@ -219,6 +224,8 @@ func main() {
 			call := createCall(newCallParams(from, "+18005551002", testSrv.URL+"/voice/conference"))
 			log.Printf("   Created conference call %s\n", call.SID)
 			time.Sleep(500 * time.Millisecond)
+			e.AnswerCall(call.SID)
+			log.Printf("   Answered call %s\n", call.SID)
 		}
 
 		time.Sleep(2 * time.Second)
@@ -228,9 +235,12 @@ func main() {
 		log.Printf("   Created call %s\n", call3.SID)
 
 		time.Sleep(1 * time.Second)
-
+		e.AnswerCall(call3.SID)
+		log.Printf("   Answered call %s\n", call3.SID)
+		time.Sleep(2 * time.Second)
 		log.Println("5. Simulating digit press (2 for support)...")
 		e.SendDigits(call3.SID, "2")
+		time.Sleep(2 * time.Second)
 
 		log.Println("")
 		log.Println("=== Demo scenario complete! ===")
