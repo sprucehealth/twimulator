@@ -30,6 +30,7 @@ type Engine interface {
 
 	// Core lifecycle
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
+	CreateIncomingCall(accountSID model.SID, from string, to string) (*twilioopenapi.ApiV2010Call, error)
 	UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error)
 	AnswerCall(callSID model.SID) error
 	SetCallBusy(callSID model.SID) error
@@ -373,6 +374,89 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 
 	e.calls[call.SID] = call
 
+	runner := NewCallRunner(call, e, timeout)
+	e.runners[call.SID] = runner
+
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		runner.Run(e.ctx)
+	}()
+
+	return buildAPICallResponse(call, e.apiVersion), nil
+}
+
+// CreateIncomingCall simulates an incoming call to a number with an application
+func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to string) (*twilioopenapi.ApiV2010Call, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Validate subaccount exists
+	if _, exists := e.subAccounts[accountSID]; !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	// Find the incoming number
+	numbers := e.incomingNumbers[accountSID]
+	if numbers == nil || numbers[to] == nil {
+		return nil, fmt.Errorf("to number %s not provisioned for account %s", to, accountSID)
+	}
+
+	incomingNum := numbers[to]
+
+	// Validate the number has an application configured
+	if incomingNum.VoiceApplication == nil {
+		return nil, fmt.Errorf("number %s does not have a voice application configured", to)
+	}
+
+	// Get the application configuration
+	apps := e.applications[accountSID]
+	if apps == nil {
+		return nil, fmt.Errorf("no applications found for account %s", accountSID)
+	}
+
+	app := apps[*incomingNum.VoiceApplication]
+	if app == nil {
+		return nil, fmt.Errorf("application %s not found for account %s", *incomingNum.VoiceApplication, accountSID)
+	}
+
+	// Validate application has VoiceURL configured
+	if app.VoiceURL == "" {
+		return nil, fmt.Errorf("application %s does not have a VoiceURL configured", app.SID)
+	}
+
+	// Create the call with application's configuration
+	now := e.clock.Now()
+	call := &model.Call{
+		SID:                  model.NewCallSID(),
+		AccountSID:           accountSID,
+		From:                 from,
+		To:                   to,
+		Direction:            model.Inbound,
+		Status:               model.CallInitiated,
+		StartAt:              now,
+		Timeline:             []model.Event{},
+		Variables:            make(map[string]string),
+		Url:                  app.VoiceURL,
+		StatusCallback:       app.StatusCallback,
+		StatusCallbackEvents: []string{}, // Use default behavior for status callbacks
+	}
+
+	call.Timeline = append(call.Timeline, model.NewEvent(
+		now,
+		"call.created",
+		map[string]any{
+			"sid":         call.SID,
+			"from":        call.From,
+			"to":          call.To,
+			"status":      call.Status,
+			"application": app.SID,
+		},
+	))
+
+	e.calls[call.SID] = call
+
+	timeout := 30 * time.Second
 	runner := NewCallRunner(call, e, timeout)
 	e.runners[call.SID] = runner
 

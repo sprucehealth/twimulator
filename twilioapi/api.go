@@ -62,6 +62,11 @@ func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopen
 	return c.engine.CreateCall(params)
 }
 
+// CreateIncomingCall simulates an incoming call to a provisioned number with an application
+func (c *Client) CreateIncomingCall(accountSID model.SID, from string, to string) (*twilioopenapi.ApiV2010Call, error) {
+	return c.engine.CreateIncomingCall(accountSID, from, to)
+}
+
 // UpdateCall proxies call updates to the engine
 func (c *Client) UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error) {
 	return c.engine.UpdateCall(sid, params)
