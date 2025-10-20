@@ -182,7 +182,11 @@ func (r *CallRunner) fetchTwiML(ctx context.Context, targetURL string, form url.
 }
 
 func (r *CallRunner) executeTwiML(ctx context.Context, resp *twiml.Response, currentTwimlDocumentURL string) error {
+	terminated := false
 	for _, node := range resp.Children {
+		if terminated {
+			break
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -191,14 +195,14 @@ func (r *CallRunner) executeTwiML(ctx context.Context, resp *twiml.Response, cur
 		default:
 		}
 
-		if err := r.executeNode(ctx, node, currentTwimlDocumentURL); err != nil {
+		if err := r.executeNode(ctx, node, currentTwimlDocumentURL, &terminated); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTwimlDocumentURL string) error {
+func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTwimlDocumentURL string, terminated *bool) error {
 	switch n := node.(type) {
 	case *twiml.Say:
 		return r.executeSay(n)
@@ -207,7 +211,7 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTw
 	case *twiml.Pause:
 		return r.executePause(ctx, n)
 	case *twiml.Gather:
-		return r.executeGather(ctx, n, currentTwimlDocumentURL)
+		return r.executeGather(ctx, n, currentTwimlDocumentURL, terminated)
 	case *twiml.Dial:
 		return r.executeDial(ctx, n, currentTwimlDocumentURL)
 	case *twiml.Enqueue:
@@ -215,7 +219,7 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTw
 	case *twiml.Redirect:
 		return r.executeRedirect(ctx, n)
 	case *twiml.Record:
-		return r.executeRecord(ctx, n, currentTwimlDocumentURL)
+		return r.executeRecord(ctx, n, currentTwimlDocumentURL, terminated)
 	case *twiml.Hangup:
 		return r.executeHangup()
 	default:
@@ -284,7 +288,7 @@ func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause) error
 	}
 }
 
-func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, currentTwimlDocumentURL string) error {
+func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, currentTwimlDocumentURL string, terminated *bool) error {
 	r.addEvent("twiml.gather", map[string]any{
 		"input":      gather.Input,
 		"timeout":    gather.Timeout.Seconds(),
@@ -298,9 +302,31 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 
 	// Execute nested children while gathering
 	for _, child := range gather.Children {
-		if err := r.executeNode(ctx, child, currentTwimlDocumentURL); err != nil {
-			return err
+		if *terminated {
+			break
 		}
+		switch n := child.(type) {
+		case *twiml.Say:
+			if err := r.executeSay(n); err != nil {
+				return err
+			}
+		case *twiml.Play:
+			if err := r.executePlay(ctx, n); err != nil {
+				return err
+			}
+		case *twiml.Pause:
+			if err := r.executePause(ctx, n); err != nil {
+				return err
+			}
+		default:
+			nodeType := fmt.Sprintf("%T", child)
+			r.addEvent("gather.invalid_child", map[string]any{"node": nodeType})
+			return fmt.Errorf("gather cannot contain %s", nodeType)
+		}
+	}
+
+	if *terminated {
+		return nil
 	}
 
 	// Wait for digits or timeout
@@ -731,7 +757,7 @@ func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redire
 	return r.executeTwiML(ctx, resp, redirect.URL)
 }
 
-func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, currentTwimlDocumentURL string) error {
+func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, currentTwimlDocumentURL string, terminated *bool) error {
 	startTime := r.clock.Now()
 
 	r.addEvent("twiml.record", map[string]any{
@@ -795,7 +821,11 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, cu
 	form.Set("RecordingStatus", recordingStatus)
 	form.Set("RecordingDuration", fmt.Sprintf("%.0f", recordingDuration.Seconds()))
 
-	return r.executeActionCallback(ctx, record.Action, form, currentTwimlDocumentURL)
+	if err := r.executeActionCallback(ctx, record.Action, form, currentTwimlDocumentURL); err != nil {
+		return err
+	}
+	*terminated = true
+	return nil
 }
 
 func (r *CallRunner) executeHangup() error {

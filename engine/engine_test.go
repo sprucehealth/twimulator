@@ -271,6 +271,56 @@ func TestGatherTimeout(t *testing.T) {
 	}
 }
 
+func TestGatherRejectsInvalidChild(t *testing.T) {
+	mock := httpstub.NewMockWebhookClient()
+
+	mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
+		if targetURL == "http://test/answer" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather input="dtmf" timeout="2" numDigits="1">
+    <Dial>+15551234</Dial>
+  </Gather>
+</Response>`), make(http.Header), nil
+		}
+		return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
+	}
+
+	e := engine.NewEngine(
+		engine.WithManualClock(),
+		engine.WithWebhookClient(mock),
+	)
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Gather Invalid")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
+
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
+	time.Sleep(10 * time.Millisecond)
+
+	if err := e.AnswerCall(call.SID); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	got, _ := e.GetCallState(call.SID)
+	if got.Status != model.CallFailed {
+		t.Errorf("expected call to fail for invalid gather child, got %s", got.Status)
+	}
+
+	hasInvalid := false
+	for _, event := range got.Timeline {
+		if event.Type == "gather.invalid_child" {
+			hasInvalid = true
+			break
+		}
+	}
+	if !hasInvalid {
+		t.Error("expected gather.invalid_child event in timeline")
+	}
+}
+
 func TestRedirect(t *testing.T) {
 	mock := httpstub.NewMockWebhookClient()
 	redirectFollowed := false
@@ -1227,6 +1277,58 @@ func TestRecordWithAction(t *testing.T) {
 	}
 	if !hasRecordCompleted {
 		t.Error("Expected record.completed event in timeline")
+	}
+}
+
+func TestRecordStopsSubsequentVerbs(t *testing.T) {
+	mock := httpstub.NewMockWebhookClient()
+	mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
+		if targetURL == "http://test/answer" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Record maxLength="5" playBeep="true" />
+  <Say>Should not run</Say>
+</Response>`), make(http.Header), nil
+		}
+		return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
+	}
+
+	e := engine.NewEngine(
+		engine.WithManualClock(),
+		engine.WithWebhookClient(mock),
+	)
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Record Stop Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+15550001")
+
+	params := newCreateCallParams(subAccount.SID, "+15550001", "+15550002", "http://test/answer")
+	call := mustCreateCall(t, e, params)
+
+	time.Sleep(10 * time.Millisecond)
+	if err := e.AnswerCall(call.SID); err != nil {
+		t.Fatal(err)
+	}
+
+	e.Advance(1 * time.Second)
+	time.Sleep(10 * time.Millisecond)
+
+	if err := e.Hangup(call.SID); err != nil {
+		t.Fatal(err)
+	}
+
+	e.Advance(10 * time.Second)
+	time.Sleep(50 * time.Millisecond)
+
+	state, ok := e.GetCallState(call.SID)
+	if !ok {
+		t.Fatal("call state not found")
+	}
+
+	for _, event := range state.Timeline {
+		if event.Type == "twiml.say" {
+			t.Fatalf("unexpected Say executed after Record: %+v", event.Detail)
+		}
 	}
 }
 
