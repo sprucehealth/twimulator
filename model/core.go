@@ -142,53 +142,54 @@ var (
 	applicationCounter uint64
 )
 
-// NewCallSID generates a new Call SID (CA prefix)
+// NewCallSID generates a new Call SID (CAFAKE prefix, 34 chars total)
 func NewCallSID() SID {
 	counter := atomic.AddUint64(&callCounter, 1)
-	// Mix counter with random bytes for uniqueness
-	b := make([]byte, 4)
+	// Generate 14 random hex characters to make total length 34
+	// CAFAKE (6) + 14 hex chars + counter hex (14) = 34
+	b := make([]byte, 7)
 	rand.Read(b)
-	return SID(fmt.Sprintf("CA%08x%s", counter, hex.EncodeToString(b)[:8]))
+	return SID(fmt.Sprintf("CAFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
 }
 
-// NewConferenceSID generates a new Conference SID (CF prefix)
+// NewConferenceSID generates a new Conference SID (CFFAKE prefix, 34 chars total)
 func NewConferenceSID() SID {
 	counter := atomic.AddUint64(&conferenceCounter, 1)
-	b := make([]byte, 4)
+	b := make([]byte, 7)
 	rand.Read(b)
-	return SID(fmt.Sprintf("CF%08x%s", counter, hex.EncodeToString(b)[:8]))
+	return SID(fmt.Sprintf("CFFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
 }
 
-// NewQueueSID generates a new Queue SID (QU prefix)
+// NewQueueSID generates a new Queue SID (QUFAKE prefix, 34 chars total)
 func NewQueueSID() SID {
 	counter := atomic.AddUint64(&queueCounter, 1)
-	b := make([]byte, 4)
+	b := make([]byte, 7)
 	rand.Read(b)
-	return SID(fmt.Sprintf("QU%08x%s", counter, hex.EncodeToString(b)[:8]))
+	return SID(fmt.Sprintf("QUFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
 }
 
-// NewApplicationSID generates a new Application SID (AP prefix)
+// NewApplicationSID generates a new Application SID (APFAKE prefix, 34 chars total)
 func NewApplicationSID() SID {
 	counter := atomic.AddUint64(&applicationCounter, 1)
-	b := make([]byte, 4)
+	b := make([]byte, 7)
 	rand.Read(b)
-	return SID(fmt.Sprintf("AP%08x%s", counter, hex.EncodeToString(b)[:8]))
+	return SID(fmt.Sprintf("APFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
 }
 
-// NewSubAccountSID generates a new SubAccount SID (AC prefix)
+// NewSubAccountSID generates a new SubAccount SID (ACFAKE prefix, 34 chars total)
 func NewSubAccountSID() SID {
 	counter := atomic.AddUint64(&subAccountCounter, 1)
-	b := make([]byte, 4)
+	b := make([]byte, 7)
 	rand.Read(b)
-	return SID(fmt.Sprintf("AC%08x%s", counter, hex.EncodeToString(b)[:8]))
+	return SID(fmt.Sprintf("ACFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
 }
 
-// NewPhoneNumberSID generates a new Incoming Phone Number SID (PN prefix)
+// NewPhoneNumberSID generates a new Incoming Phone Number SID (PNFAKE prefix, 34 chars total)
 func NewPhoneNumberSID() SID {
 	counter := atomic.AddUint64(&phoneNumberCounter, 1)
-	b := make([]byte, 4)
+	b := make([]byte, 7)
 	rand.Read(b)
-	return SID(fmt.Sprintf("PN%08x%s", counter, hex.EncodeToString(b)[:8]))
+	return SID(fmt.Sprintf("PNFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
 }
 
 // NewAuthToken generates a pseudo-random auth token for subaccounts

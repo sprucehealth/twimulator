@@ -994,15 +994,116 @@ func TestUpdateIncomingPhoneNumber(t *testing.T) {
 
 	// Update with non-existent application should fail
 	invalidParams := (&twilioopenapi.UpdateIncomingPhoneNumberParams{}).
-		SetVoiceApplicationSid("AP00000000000000000000000000000000")
+		SetVoiceApplicationSid("APFAKE00000000000000000000000000")
 	_, err = e.UpdateIncomingPhoneNumber(*number.Sid, invalidParams)
 	if err == nil {
 		t.Fatal("expected error when updating with non-existent application")
 	}
 
 	// Update non-existent number should fail
-	_, err = e.UpdateIncomingPhoneNumber("PN00000000000000000000000000000000", updateParams)
+	_, err = e.UpdateIncomingPhoneNumber("PNFAKE00000000000000000000000000", updateParams)
 	if err == nil {
 		t.Fatal("expected error when updating non-existent number")
+	}
+}
+
+func TestSIDLength(t *testing.T) {
+	e := engine.NewEngine(engine.WithManualClock())
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+
+	// Test Call SID length
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
+	if len(string(call.SID)) != 34 {
+		t.Errorf("Call SID length expected 34, got %d: %s", len(string(call.SID)), call.SID)
+	}
+	if string(call.SID)[:6] != "CAFAKE" {
+		t.Errorf("Call SID expected to start with CAFAKE, got: %s", call.SID)
+	}
+
+	// Test SubAccount SID length
+	if len(string(subAccount.SID)) != 34 {
+		t.Errorf("SubAccount SID length expected 34, got %d: %s", len(string(subAccount.SID)), subAccount.SID)
+	}
+	if string(subAccount.SID)[:6] != "ACFAKE" {
+		t.Errorf("SubAccount SID expected to start with ACFAKE, got: %s", subAccount.SID)
+	}
+
+	// Test Application SID length
+	app, err := e.CreateApplication((&twilioopenapi.CreateApplicationParams{}).
+		SetPathAccountSid(string(subAccount.SID)).
+		SetFriendlyName("Test App"))
+	if err != nil {
+		t.Fatalf("create application failed: %v", err)
+	}
+	if len(*app.Sid) != 34 {
+		t.Errorf("Application SID length expected 34, got %d: %s", len(*app.Sid), *app.Sid)
+	}
+	if (*app.Sid)[:6] != "APFAKE" {
+		t.Errorf("Application SID expected to start with APFAKE, got: %s", *app.Sid)
+	}
+
+	// Test Phone Number SID length
+	number, err := e.CreateIncomingPhoneNumber((&twilioopenapi.CreateIncomingPhoneNumberParams{}).
+		SetPathAccountSid(string(subAccount.SID)).
+		SetPhoneNumber("+15559999999"))
+	if err != nil {
+		t.Fatalf("create phone number failed: %v", err)
+	}
+	if len(*number.Sid) != 34 {
+		t.Errorf("Phone Number SID length expected 34, got %d: %s", len(*number.Sid), *number.Sid)
+	}
+	if (*number.Sid)[:6] != "PNFAKE" {
+		t.Errorf("Phone Number SID expected to start with PNFAKE, got: %s", *number.Sid)
+	}
+
+	// Test Queue SID length
+	queue, err := e.CreateQueue((&twilioopenapi.CreateQueueParams{}).
+		SetPathAccountSid(string(subAccount.SID)).
+		SetFriendlyName("test-queue"))
+	if err != nil {
+		t.Fatalf("create queue failed: %v", err)
+	}
+	if len(*queue.Sid) != 34 {
+		t.Errorf("Queue SID length expected 34, got %d: %s", len(*queue.Sid), *queue.Sid)
+	}
+	if (*queue.Sid)[:6] != "QUFAKE" {
+		t.Errorf("Queue SID expected to start with QUFAKE, got: %s", *queue.Sid)
+	}
+
+	// Test Conference SID length (need to create a call with conference TwiML)
+	mock := httpstub.NewMockWebhookClient()
+	mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
+		return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial><Conference>test-room</Conference></Dial>
+</Response>`), make(http.Header), nil
+	}
+
+	e2 := engine.NewEngine(
+		engine.WithManualClock(),
+		engine.WithWebhookClient(mock),
+	)
+	defer e2.Close()
+
+	subAccount2 := createTestSubAccount(t, e2, "Test Account 2")
+	mustProvisionNumbers(t, e2, subAccount2.SID, "+1111")
+	confCall := mustCreateCall(t, e2, newCreateCallParams(subAccount2.SID, "+1111", "+2222", "http://test/answer"))
+	time.Sleep(10 * time.Millisecond)
+	e2.AnswerCall(confCall.SID)
+	e2.Advance(2 * time.Second)
+	time.Sleep(10 * time.Millisecond)
+
+	conf, ok := e2.GetConference(subAccount2.SID, "test-room")
+	if !ok {
+		t.Fatal("Conference not found")
+	}
+	if len(string(conf.SID)) != 34 {
+		t.Errorf("Conference SID length expected 34, got %d: %s", len(string(conf.SID)), conf.SID)
+	}
+	if string(conf.SID)[:6] != "CFFAKE" {
+		t.Errorf("Conference SID expected to start with CFFAKE, got: %s", conf.SID)
 	}
 }
