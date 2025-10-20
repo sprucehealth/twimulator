@@ -1643,11 +1643,12 @@ func (e *EngineImpl) sendStatusCallback(call *model.Call) {
 		e.clock.Now(),
 		"webhook.status_callback",
 		map[string]any{
-			"url":     call.StatusCallback,
-			"status":  status,
-			"error":   err,
-			"headers": headers,
-			"body":    string(body),
+			"url":         call.StatusCallback,
+			"call_status": string(call.Status),
+			"status":      status,
+			"error":       err,
+			"headers":     headers,
+			"body":        string(body),
 		},
 	))
 	e.mu.Unlock()
