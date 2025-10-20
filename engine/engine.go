@@ -52,6 +52,8 @@ type Engine interface {
 	Snapshot(accountSID model.SID) (*StateSnapshot, error)
 	SnapshotAll() *StateSnapshot
 
+	SetClockForAccount(accountSID model.SID, clock Clock)
+	AdvanceForAccount(accountSID model.SID, d time.Duration) error
 	// Time control
 	SetAutoTime(enabled bool)
 	Advance(d time.Duration)
@@ -79,10 +81,11 @@ type StateSnapshot struct {
 
 // EngineImpl is the concrete implementation of Engine
 type EngineImpl struct {
-	mu         sync.RWMutex
-	clock      Clock
-	webhook    httpstub.WebhookClient
-	apiVersion string
+	mu               sync.RWMutex
+	defaultClock     Clock
+	subAccountClocks map[model.SID]Clock // Optional per-subaccount clocks
+	webhook          httpstub.WebhookClient
+	apiVersion       string
 
 	// Subaccount management
 	subAccounts     map[model.SID]*model.SubAccount
@@ -127,28 +130,28 @@ type applicationRecord struct {
 // WithManualClock configures the engine to use a manual clock
 func WithManualClock() EngineOption {
 	return func(e *EngineImpl) {
-		e.clock = NewManualClock(time.Time{})
+		e.defaultClock = NewManualClock(time.Time{})
 	}
 }
 
 // WithAutoClock configures the engine to use real time
 func WithAutoClock() EngineOption {
 	return func(e *EngineImpl) {
-		e.clock = NewAutoClock()
+		e.defaultClock = NewAutoClock()
 	}
 }
 
 // WithAutoAdvancableClock configures the engine to use real time with manual advance capability
 func WithAutoAdvancableClock() EngineOption {
 	return func(e *EngineImpl) {
-		e.clock = NewAutoAdvancableClock()
+		e.defaultClock = NewAutoAdvancableClock()
 	}
 }
 
 // WithClock sets a specific clock implementation
 func WithClock(clock Clock) EngineOption {
 	return func(e *EngineImpl) {
-		e.clock = clock
+		e.defaultClock = clock
 	}
 }
 
@@ -164,7 +167,8 @@ func NewEngine(opts ...EngineOption) *EngineImpl {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &EngineImpl{
-		clock:             NewManualClock(time.Time{}), // default to manual
+		defaultClock:      NewManualClock(time.Time{}), // default to manual
+		subAccountClocks:  make(map[model.SID]Clock),
 		webhook:           httpstub.NewDefaultWebhookClient(10 * time.Second),
 		apiVersion:        "2010-04-01",
 		subAccounts:       make(map[model.SID]*model.SubAccount),
@@ -196,8 +200,8 @@ func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*
 		friendlyName = *params.FriendlyName
 	}
 
-	now := e.clock.Now()
 	sid := model.NewSubAccountSID()
+	now := e.clockNowLocked(sid)
 	authToken := model.NewAuthToken()
 
 	subAccount := &model.SubAccount{
@@ -344,7 +348,7 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		return nil, fmt.Errorf("from number %s not provisioned for account %s", from, accountSID)
 	}
 
-	now := e.clock.Now()
+	now := e.clockNowLocked(accountSIDModel)
 	call := &model.Call{
 		SID:                  model.NewCallSID(),
 		AccountSID:           accountSIDModel,
@@ -382,7 +386,7 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 
 	e.calls[call.SID] = call
 
-	runner := NewCallRunner(call, e, timeout)
+	runner := NewCallRunner(call, e.getClockForAccountLocked(accountSIDModel), e, timeout)
 	e.runners[call.SID] = runner
 
 	e.wg.Add(1)
@@ -434,20 +438,20 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 	}
 
 	// Create the call with application's configuration
-	now := e.clock.Now()
+	now := e.clockNowLocked(accountSID)
 	call := &model.Call{
 		SID:                  model.NewCallSID(),
 		AccountSID:           accountSID,
 		From:                 from,
 		To:                   to,
 		Direction:            model.Inbound,
-		Status:               model.CallRinging,
+		Status:               model.CallInitiated,
 		StartAt:              now,
 		Timeline:             []model.Event{},
 		Variables:            make(map[string]string),
 		Url:                  app.VoiceURL,
 		StatusCallback:       app.StatusCallback,
-		StatusCallbackEvents: []string{}, // Use default behavior for status callbacks
+		StatusCallbackEvents: []string{"completed"}, // Twiml application only sends the completed event
 	}
 
 	call.Timeline = append(call.Timeline, model.NewEvent(
@@ -465,7 +469,7 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 	e.calls[call.SID] = call
 
 	timeout := 30 * time.Second
-	runner := NewCallRunner(call, e, timeout)
+	runner := NewCallRunner(call, e.getClockForAccountLocked(accountSID), e, timeout)
 	e.runners[call.SID] = runner
 
 	e.wg.Add(1)
@@ -529,7 +533,7 @@ func (e *EngineImpl) CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncom
 		appValue = string(appSID)
 	}
 
-	now := e.clock.Now()
+	now := e.clockNowLocked(accountSIDModel)
 	sid := model.NewPhoneNumberSID()
 	record := &incomingNumber{
 		SID:              sid,
@@ -762,7 +766,7 @@ func (e *EngineImpl) CreateApplication(params *twilioopenapi.CreateApplicationPa
 		e.applications[accountSID] = recMap
 	}
 
-	now := e.clock.Now()
+	now := e.clockNowLocked(accountSID)
 	sid := model.NewApplicationSID()
 	rec := &applicationRecord{
 		SID:                  sid,
@@ -844,7 +848,7 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 		return nil, fmt.Errorf("call %s not found", sid)
 	}
 	runner := e.runners[call.SID]
-	now := e.clock.Now()
+	now := e.clockNowLocked(call.AccountSID)
 	updatedFields := make(map[string]any)
 	needHangup := false
 
@@ -983,7 +987,7 @@ func (e *EngineImpl) Hangup(callSID model.SID) error {
 	e.mu.Lock()
 	if call.Status != model.CallCompleted {
 		e.updateCallStatus(call, model.CallCompleted)
-		now := e.clock.Now()
+		now := e.clockNowLocked(call.AccountSID)
 		call.EndedAt = &now
 	}
 	e.mu.Unlock()
@@ -1115,7 +1119,7 @@ func (e *EngineImpl) UpdateConference(sid string, params *twilioopenapi.UpdateCo
 		switch statusStr {
 		case "completed":
 			conf.Status = model.ConferenceCompleted
-			now := e.clock.Now()
+			now := e.clockNowLocked(conf.AccountSID)
 			conf.EndedAt = &now
 			conf.Timeline = append(conf.Timeline, model.NewEvent(
 				now,
@@ -1248,7 +1252,7 @@ func (e *EngineImpl) UpdateParticipant(conferenceSid string, callSid string, par
 	}
 
 	// Update participant state
-	now := e.clock.Now()
+	now := e.clockNowLocked(conf.AccountSID)
 	updatedFields := make(map[string]any)
 
 	if params.Muted != nil {
@@ -1391,7 +1395,7 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 		Queues:      make(map[string]*model.Queue),
 		Conferences: make(map[string]*model.Conference),
 		SubAccounts: make(map[model.SID]*model.SubAccount),
-		Timestamp:   e.clock.Now(),
+		Timestamp:   e.clockNowLocked(accountSID),
 	}
 
 	// Only include calls for this subaccount
@@ -1453,7 +1457,7 @@ func (e *EngineImpl) SnapshotAll() *StateSnapshot {
 		Queues:      make(map[string]*model.Queue),
 		Conferences: make(map[string]*model.Conference),
 		SubAccounts: make(map[model.SID]*model.SubAccount),
-		Timestamp:   e.clock.Now(),
+		Timestamp:   e.defaultClock.Now(),
 	}
 
 	// Include all calls
@@ -1546,14 +1550,14 @@ func (e *EngineImpl) SetAutoTime(enabled bool) {
 	defer e.mu.Unlock()
 
 	if enabled {
-		if _, ok := e.clock.(*AutoClock); !ok {
+		if _, ok := e.defaultClock.(*AutoClock); !ok {
 			log.Println("Switching to auto clock")
-			e.clock = NewAutoClock()
+			e.defaultClock = NewAutoClock()
 		}
 	} else {
-		if _, ok := e.clock.(*ManualClock); !ok {
+		if _, ok := e.defaultClock.(*ManualClock); !ok {
 			log.Println("Switching to manual clock")
-			e.clock = NewManualClock(e.clock.Now())
+			e.defaultClock = NewManualClock(e.defaultClock.Now())
 		}
 	}
 }
@@ -1561,7 +1565,7 @@ func (e *EngineImpl) SetAutoTime(enabled bool) {
 // Advance advances the manual clock or auto-advancable clock (no-op for pure auto clock)
 func (e *EngineImpl) Advance(d time.Duration) {
 	e.mu.RLock()
-	clock := e.clock
+	clock := e.defaultClock
 	e.mu.RUnlock()
 
 	if mc, ok := clock.(*ManualClock); ok {
@@ -1575,13 +1579,80 @@ func (e *EngineImpl) Advance(d time.Duration) {
 func (e *EngineImpl) Clock() Clock {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.clock
+	return e.defaultClock
 }
 
 // Close shuts down the engine
 func (e *EngineImpl) Close() error {
 	e.cancel()
 	e.wg.Wait()
+
+	e.mu.RLock()
+	if aac, ok := e.defaultClock.(*AutoAdvancableClock); ok {
+		aac.Stop()
+	}
+	for _, clock := range e.subAccountClocks {
+		if aac, ok := clock.(*AutoAdvancableClock); ok {
+			aac.Stop()
+		}
+	}
+	e.mu.RUnlock()
+	return nil
+}
+
+// getClockForAccountLocked returns the clock for a specific subaccount.
+// Caller must already hold e.mu (read or write).
+func (e *EngineImpl) getClockForAccountLocked(accountSID model.SID) Clock {
+	if clock, exists := e.subAccountClocks[accountSID]; exists {
+		return clock
+	}
+	return e.defaultClock
+}
+
+// getClockForAccount returns the clock for a specific subaccount,
+// or the default clock if no subaccount-specific clock is set
+func (e *EngineImpl) getClockForAccount(accountSID model.SID) Clock {
+	e.mu.RLock()
+	clock := e.getClockForAccountLocked(accountSID)
+	e.mu.RUnlock()
+	return clock
+}
+
+// clockNow is a convenience helper that gets the current time for a specific account
+// without requiring the caller to manage locking.
+func (e *EngineImpl) clockNow(accountSID model.SID) time.Time {
+	return e.getClockForAccount(accountSID).Now()
+}
+
+// clockNowLocked gets the current time assuming the caller already holds e.mu.
+func (e *EngineImpl) clockNowLocked(accountSID model.SID) time.Time {
+	return e.getClockForAccountLocked(accountSID).Now()
+}
+
+// SetClockForAccount sets a custom clock for a specific subaccount (testing only)
+func (e *EngineImpl) SetClockForAccount(accountSID model.SID, clock Clock) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.subAccountClocks[accountSID] = clock
+}
+
+// AdvanceForAccount advances the clock for a specific subaccount.
+// Returns an error if no custom clock has been set for this account.
+func (e *EngineImpl) AdvanceForAccount(accountSID model.SID, d time.Duration) error {
+	e.mu.RLock()
+	clock, exists := e.subAccountClocks[accountSID]
+	e.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("no custom clock set for account %s; use SetClockForAccount first", accountSID)
+	}
+
+	if mc, ok := clock.(*ManualClock); ok {
+		mc.Advance(d)
+	} else if aac, ok := clock.(*AutoAdvancableClock); ok {
+		aac.Advance(d)
+	}
+
 	return nil
 }
 
@@ -1596,7 +1667,7 @@ func (e *EngineImpl) updateCallStatus(call *model.Call, newStatus model.CallStat
 
 	// Add timeline event
 	call.Timeline = append(call.Timeline, model.NewEvent(
-		e.clock.Now(),
+		e.clockNowLocked(call.AccountSID),
 		"status.changed",
 		map[string]any{
 			"from": oldStatus,
@@ -1640,7 +1711,7 @@ func (e *EngineImpl) sendStatusCallback(call *model.Call) {
 	// Log the webhook
 	e.mu.Lock()
 	call.Timeline = append(call.Timeline, model.NewEvent(
-		e.clock.Now(),
+		e.clockNowLocked(call.AccountSID),
 		"webhook.status_callback",
 		map[string]any{
 			"url":         call.StatusCallback,
@@ -1664,7 +1735,7 @@ func (e *EngineImpl) buildCallbackForm(call *model.Call) url.Values {
 	form.Set("CallStatus", string(call.Status))
 	form.Set("Direction", string(call.Direction))
 	form.Set("ApiVersion", e.apiVersion)
-	form.Set("Timestamp", e.clock.Now().Format(time.RFC3339))
+	form.Set("Timestamp", e.clockNow(call.AccountSID).Format(time.RFC3339))
 
 	if call.ParentCallSID != nil {
 		form.Set("ParentCallSid", string(*call.ParentCallSID))
@@ -1673,7 +1744,7 @@ func (e *EngineImpl) buildCallbackForm(call *model.Call) url.Values {
 	return form
 }
 
-// getOrCreateQueue gets or creates a queue for a subaccount
+// getOrCreateQueue gets or creates a queue for a subaccount. Caller must hold e.mu.
 func (e *EngineImpl) getOrCreateQueue(accountSID model.SID, name string) *model.Queue {
 	// Ensure the subaccount map exists
 	if _, exists := e.queues[accountSID]; !exists {
@@ -1692,7 +1763,7 @@ func (e *EngineImpl) getOrCreateQueue(accountSID model.SID, name string) *model.
 		Timeline:   []model.Event{},
 	}
 	queue.Timeline = append(queue.Timeline, model.NewEvent(
-		e.clock.Now(),
+		e.clockNowLocked(accountSID),
 		"queue.created",
 		map[string]any{"name": name, "sid": queue.SID, "account_sid": accountSID},
 	))
@@ -1700,7 +1771,7 @@ func (e *EngineImpl) getOrCreateQueue(accountSID model.SID, name string) *model.
 	return queue
 }
 
-// getOrCreateConference gets or creates a conference for a subaccount
+// getOrCreateConference gets or creates a conference for a subaccount. Caller must hold e.mu.
 func (e *EngineImpl) getOrCreateConference(accountSID model.SID, name string) *model.Conference {
 	// Ensure the subaccount map exists
 	if _, exists := e.conferences[accountSID]; !exists {
@@ -1718,10 +1789,10 @@ func (e *EngineImpl) getOrCreateConference(accountSID model.SID, name string) *m
 		Participants: []model.SID{},
 		Status:       model.ConferenceCreated,
 		Timeline:     []model.Event{},
-		CreatedAt:    e.clock.Now(),
+		CreatedAt:    e.clockNowLocked(accountSID),
 	}
 	conf.Timeline = append(conf.Timeline, model.NewEvent(
-		e.clock.Now(),
+		e.clockNowLocked(accountSID),
 		"conference.created",
 		map[string]any{"name": name, "sid": conf.SID, "account_sid": accountSID},
 	))

@@ -9,6 +9,7 @@ import (
 
 func TestAutoAdvancableClock(t *testing.T) {
 	clock := engine.NewAutoAdvancableClock()
+	defer clock.Stop()
 
 	// Get initial time
 	start := clock.Now()
@@ -42,6 +43,58 @@ func TestAutoAdvancableClock(t *testing.T) {
 	totalElapsed := afterSecondAdvance.Sub(start)
 	if totalElapsed < 15*time.Second {
 		t.Errorf("Expected at least 15 seconds elapsed after two advances, got %v", totalElapsed)
+	}
+}
+
+func TestAutoAdvancableClockAdvanceTriggersTimers(t *testing.T) {
+	clock := engine.NewAutoAdvancableClock()
+	defer clock.Stop()
+
+	ch := clock.After(2 * time.Second)
+
+	select {
+	case <-ch:
+		t.Fatal("timer should not fire immediately")
+	default:
+	}
+
+	clock.Advance(2 * time.Second)
+
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected timer to fire after advance")
+	}
+
+	triggered := make(chan struct{})
+	clock.AfterFunc(2*time.Second, func() {
+		close(triggered)
+	})
+
+	clock.Advance(2 * time.Second)
+
+	select {
+	case <-triggered:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected AfterFunc to fire after advance")
+	}
+
+	didSleep := make(chan struct{})
+	ready := make(chan struct{})
+	go func() {
+		close(ready)
+		clock.Sleep(2 * time.Second)
+		close(didSleep)
+	}()
+
+	<-ready
+	time.Sleep(5 * time.Millisecond) // allow Sleep to register timer before advancing
+	clock.Advance(2 * time.Second)
+
+	select {
+	case <-didSleep:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected Sleep to return after advance")
 	}
 }
 

@@ -18,6 +18,7 @@ var ErrCallHungup = errors.New("call hungup via Hangup verb")
 // CallRunner executes TwiML for a call
 type CallRunner struct {
 	call    *model.Call
+	clock   Clock
 	engine  *EngineImpl
 	timeout time.Duration
 
@@ -32,9 +33,10 @@ type CallRunner struct {
 }
 
 // NewCallRunner creates a new call runner
-func NewCallRunner(call *model.Call, engine *EngineImpl, timeout time.Duration) *CallRunner {
+func NewCallRunner(call *model.Call, clock Clock, engine *EngineImpl, timeout time.Duration) *CallRunner {
 	return &CallRunner{
 		call:      call,
+		clock:     clock,
 		engine:    engine,
 		timeout:   timeout,
 		gatherCh:  make(chan string, 1),
@@ -50,13 +52,14 @@ func NewCallRunner(call *model.Call, engine *EngineImpl, timeout time.Duration) 
 // Run executes the call lifecycle
 func (r *CallRunner) Run(ctx context.Context) {
 	defer close(r.done)
+	// Transition to ringing
+	r.updateStatus(model.CallRinging)
+
 	if r.call.Direction == model.Inbound {
 		// backend auto-answers an inbound call
 		r.answer(ctx)
 		return
 	}
-	// Transition to ringing
-	r.updateStatus(model.CallRinging)
 
 	// Wait for explicit answer, busy, failed, or timeout
 	select {
@@ -71,7 +74,7 @@ func (r *CallRunner) Run(ctx context.Context) {
 	case <-r.failedCh:
 		r.updateStatus(model.CallFailed)
 		return
-	case <-r.engine.clock.After(r.timeout):
+	case <-r.clock.After(r.timeout):
 		r.updateStatus(model.CallNoAnswer)
 		return
 	case <-r.answerCh:
@@ -81,12 +84,17 @@ func (r *CallRunner) Run(ctx context.Context) {
 }
 
 func (r *CallRunner) answer(ctx context.Context) {
-	r.updateStatus(model.CallInProgress)
-	now := r.engine.clock.Now()
-	r.engine.mu.Lock()
-	r.call.AnsweredAt = &now
-	r.engine.mu.Unlock()
-
+	answerNow := func() {
+		r.updateStatus(model.CallInProgress)
+		now := r.clock.Now()
+		r.engine.mu.Lock()
+		r.call.AnsweredAt = &now
+		r.engine.mu.Unlock()
+	}
+	if r.call.Direction != model.Inbound {
+		// an outbound call is answered first, and then it's url is fetched
+		answerNow()
+	}
 	// Fetch initial TwiML
 	twimlResp, err := r.fetchTwiML(ctx, r.call.Url, url.Values{})
 	if err != nil {
@@ -94,9 +102,13 @@ func (r *CallRunner) answer(ctx context.Context) {
 		r.updateStatus(model.CallFailed)
 		return
 	}
+	if r.call.Direction == model.Inbound {
+		// backend answers the inbound call when twiml is fetched
+		answerNow()
+	}
 
 	// Execute TwiML
-	if err := r.executeTwiML(ctx, twimlResp); err != nil {
+	if err := r.executeTwiML(ctx, twimlResp, r.call.Url); err != nil {
 		// Check if this is a normal hangup or an actual error
 		if errors.Is(err, ErrCallHungup) {
 			// Normal hangup via <Hangup/> verb - call already completed by executeHangup
@@ -114,7 +126,7 @@ func (r *CallRunner) answer(ctx context.Context) {
 		return
 	case <-r.hangupCh:
 		r.updateStatus(model.CallCompleted)
-		now := r.engine.clock.Now()
+		now := r.clock.Now()
 		r.engine.mu.Lock()
 		r.call.EndedAt = &now
 		r.engine.mu.Unlock()
@@ -169,7 +181,7 @@ func (r *CallRunner) fetchTwiML(ctx context.Context, targetURL string, form url.
 	return resp, nil
 }
 
-func (r *CallRunner) executeTwiML(ctx context.Context, resp *twiml.Response) error {
+func (r *CallRunner) executeTwiML(ctx context.Context, resp *twiml.Response, currentTwimlDocumentURL string) error {
 	for _, node := range resp.Children {
 		select {
 		case <-ctx.Done():
@@ -179,14 +191,14 @@ func (r *CallRunner) executeTwiML(ctx context.Context, resp *twiml.Response) err
 		default:
 		}
 
-		if err := r.executeNode(ctx, node); err != nil {
+		if err := r.executeNode(ctx, node, currentTwimlDocumentURL); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node) error {
+func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTwimlDocumentURL string) error {
 	switch n := node.(type) {
 	case *twiml.Say:
 		return r.executeSay(n)
@@ -195,15 +207,15 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node) error {
 	case *twiml.Pause:
 		return r.executePause(ctx, n)
 	case *twiml.Gather:
-		return r.executeGather(ctx, n)
+		return r.executeGather(ctx, n, currentTwimlDocumentURL)
 	case *twiml.Dial:
-		return r.executeDial(ctx, n)
+		return r.executeDial(ctx, n, currentTwimlDocumentURL)
 	case *twiml.Enqueue:
-		return r.executeEnqueue(ctx, n)
+		return r.executeEnqueue(ctx, n, currentTwimlDocumentURL)
 	case *twiml.Redirect:
 		return r.executeRedirect(ctx, n)
 	case *twiml.Record:
-		return r.executeRecord(ctx, n)
+		return r.executeRecord(ctx, n, currentTwimlDocumentURL)
 	case *twiml.Hangup:
 		return r.executeHangup()
 	default:
@@ -267,12 +279,12 @@ func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause) error
 		return ctx.Err()
 	case <-r.hangupCh:
 		return nil
-	case <-r.engine.clock.After(pause.Length):
+	case <-r.clock.After(pause.Length):
 		return nil
 	}
 }
 
-func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather) error {
+func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, currentTwimlDocumentURL string) error {
 	r.addEvent("twiml.gather", map[string]any{
 		"input":      gather.Input,
 		"timeout":    gather.Timeout.Seconds(),
@@ -286,7 +298,7 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather) er
 
 	// Execute nested children while gathering
 	for _, child := range gather.Children {
-		if err := r.executeNode(ctx, child); err != nil {
+		if err := r.executeNode(ctx, child, currentTwimlDocumentURL); err != nil {
 			return err
 		}
 	}
@@ -301,7 +313,7 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather) er
 	case digits = <-r.gatherCh:
 		// Got digits
 		r.addEvent("gather.digits", map[string]any{"digits": digits})
-	case <-r.engine.clock.After(gather.Timeout):
+	case <-r.clock.After(gather.Timeout):
 		// Timeout
 		digits = ""
 		r.addEvent("gather.timeout", map[string]any{})
@@ -316,10 +328,10 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather) er
 	form := url.Values{}
 	form.Set("Digits", digits)
 
-	return r.executeActionCallback(ctx, gather.Action, form)
+	return r.executeActionCallback(ctx, gather.Action, form, currentTwimlDocumentURL)
 }
 
-func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial) error {
+func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentTwimlDocumentURL string) error {
 	r.addEvent("twiml.dial", map[string]any{
 		"number":     dial.Number,
 		"client":     dial.Client,
@@ -330,7 +342,7 @@ func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial) error {
 
 	// Handle different dial targets
 	if dial.Queue != "" {
-		return r.executeDialQueue(ctx, dial)
+		return r.executeDialQueue(ctx, dial, currentTwimlDocumentURL)
 	}
 	if dial.Conference != "" {
 		return r.executeDialConference(ctx, dial)
@@ -342,7 +354,7 @@ func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial) error {
 	return nil
 }
 
-func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial) error {
+func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial, currentTwimlDocumentURL string) error {
 	r.engine.mu.Lock()
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, dial.Queue)
 	queueSID := queue.SID
@@ -361,16 +373,16 @@ func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial) err
 
 	if targetCallSID != "" {
 		// Scenario 1: Bridge with waiting caller
-		return r.bridgeWithQueueMember(ctx, dial, queue, queueSID, targetCallSID)
+		return r.bridgeWithQueueMember(ctx, dial, queue, queueSID, targetCallSID, currentTwimlDocumentURL)
 	}
 
 	// Scenario 2: No waiting callers, join queue and wait
-	return r.waitInDialQueue(ctx, dial, queue, queueSID)
+	return r.waitInDialQueue(ctx, dial, queue, queueSID, currentTwimlDocumentURL)
 }
 
 // bridgeWithQueueMember connects this call to a waiting queue member
-func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial, queue *model.Queue, queueSID model.SID, targetCallSID model.SID) error {
-	startTime := r.engine.clock.Now()
+func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial, queue *model.Queue, queueSID model.SID, targetCallSID model.SID, currentTwimlDocumentURL string) error {
+	startTime := r.clock.Now()
 
 	r.addEvent("dial.queue.bridging", map[string]any{
 		"queue":           dial.Queue,
@@ -405,12 +417,12 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 	select {
 	case <-ctx.Done():
 	case <-r.hangupCh:
-	case <-r.engine.clock.After(dial.Timeout):
+	case <-r.clock.After(dial.Timeout):
 		// Bridge timeout
 		dialDuration = int(dial.Timeout.Seconds())
 	}
 
-	endTime := r.engine.clock.Now()
+	endTime := r.clock.Now()
 	dialDuration = int(endTime.Sub(startTime).Seconds())
 	targetQueueTime := 0
 	if !targetQueueStart.IsZero() {
@@ -432,12 +444,12 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", targetQueueTime))
 
-	return r.executeActionCallback(ctx, dial.Action, form)
+	return r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL)
 }
 
 // waitInDialQueue waits in queue when no members are available
-func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queue *model.Queue, queueSID model.SID) error {
-	startTime := r.engine.clock.Now()
+func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queue *model.Queue, queueSID model.SID, currentTwimlDocumentURL string) error {
+	startTime := r.clock.Now()
 
 	r.engine.mu.Lock()
 	// Add this call to the queue
@@ -470,7 +482,7 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	case result := <-r.dequeueCh:
 		dialStatus = "completed"
 		queueResult = result
-	case <-r.engine.clock.After(dial.Timeout):
+	case <-r.clock.After(dial.Timeout):
 		dialStatus = "no-answer"
 		queueResult = "timeout"
 		r.addEvent("dial.queue.timeout", map[string]any{})
@@ -478,7 +490,7 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 
 	// Calculate time in queue
 	r.engine.mu.Lock()
-	endTime := r.engine.clock.Now()
+	endTime := r.clock.Now()
 	queueTime := int(endTime.Sub(startTime).Seconds())
 	r.removeFromQueue(queue)
 	r.call.CurrentEndpoint = ""
@@ -499,7 +511,7 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
 
-	return r.executeActionCallback(ctx, dial.Action, form)
+	return r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL)
 }
 
 func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial) error {
@@ -509,7 +521,7 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 	// Add participant
 	conf.Participants = append(conf.Participants, r.call.SID)
 	conf.Timeline = append(conf.Timeline, model.NewEvent(
-		r.engine.clock.Now(),
+		r.clock.Now(),
 		"participant.joined",
 		map[string]any{"call_sid": r.call.SID},
 	))
@@ -518,7 +530,7 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 	if len(conf.Participants) >= 2 && conf.Status == model.ConferenceCreated {
 		conf.Status = model.ConferenceInProgress
 		conf.Timeline = append(conf.Timeline, model.NewEvent(
-			r.engine.clock.Now(),
+			r.clock.Now(),
 			"conference.started",
 			map[string]any{},
 		))
@@ -562,14 +574,14 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial) er
 		return ctx.Err()
 	case <-r.hangupCh:
 		return nil
-	case <-r.engine.clock.After(dial.Timeout):
+	case <-r.clock.After(dial.Timeout):
 		r.addEvent("dial.no_answer", map[string]any{})
 	}
 
 	return nil
 }
 
-func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue) error {
+func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue, currentTwimlDocumentURL string) error {
 	r.engine.mu.Lock()
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, enqueue.Name)
 	queueSID := queue.SID
@@ -588,16 +600,16 @@ func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue)
 
 	if targetCallSID != "" {
 		// Scenario 1: Bridge with waiting agent immediately
-		return r.bridgeEnqueueWithAgent(ctx, enqueue, queueSID, targetCallSID)
+		return r.bridgeEnqueueWithAgent(ctx, enqueue, queueSID, targetCallSID, currentTwimlDocumentURL)
 	}
 
 	// Scenario 2: No waiting agents, enqueue and wait
-	return r.waitInEnqueue(ctx, enqueue, queueSID)
+	return r.waitInEnqueue(ctx, enqueue, queueSID, currentTwimlDocumentURL)
 }
 
 // bridgeEnqueueWithAgent connects this enqueued call to a waiting agent
-func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.Enqueue, queueSID model.SID, agentCallSID model.SID) error {
-	startTime := r.engine.clock.Now()
+func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.Enqueue, queueSID model.SID, agentCallSID model.SID, currentTwimlDocumentURL string) error {
+	startTime := r.clock.Now()
 
 	r.addEvent("enqueue.bridging", map[string]any{
 		"queue":          enqueue.Name,
@@ -623,7 +635,7 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 	case <-r.hangupCh:
 	}
 
-	endTime := r.engine.clock.Now()
+	endTime := r.clock.Now()
 	queueTime := int(endTime.Sub(startTime).Seconds())
 
 	r.addEvent("enqueue.bridged", map[string]any{
@@ -638,12 +650,12 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
 
-	return r.executeActionCallback(ctx, enqueue.Action, form)
+	return r.executeActionCallback(ctx, enqueue.Action, form, currentTwimlDocumentURL)
 }
 
 // waitInEnqueue waits in queue when no agents are available
-func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, queueSID model.SID) error {
-	startTime := r.engine.clock.Now()
+func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, queueSID model.SID, currentTwimlDocumentURL string) error {
+	startTime := r.clock.Now()
 
 	r.engine.mu.Lock()
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, enqueue.Name)
@@ -683,7 +695,7 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 
 	// Calculate time in queue
 	r.engine.mu.Lock()
-	endTime := r.engine.clock.Now()
+	endTime := r.clock.Now()
 	queueTime := int(endTime.Sub(startTime).Seconds())
 	r.removeFromQueue(queue)
 	r.call.CurrentEndpoint = ""
@@ -701,7 +713,7 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
 
-	return r.executeActionCallback(ctx, enqueue.Action, form)
+	return r.executeActionCallback(ctx, enqueue.Action, form, currentTwimlDocumentURL)
 }
 
 func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redirect) error {
@@ -716,11 +728,11 @@ func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redire
 		return err
 	}
 
-	return r.executeTwiML(ctx, resp)
+	return r.executeTwiML(ctx, resp, redirect.URL)
 }
 
-func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record) error {
-	startTime := r.engine.clock.Now()
+func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, currentTwimlDocumentURL string) error {
+	startTime := r.clock.Now()
 
 	r.addEvent("twiml.record", map[string]any{
 		"max_length": record.MaxLength.Seconds(),
@@ -747,16 +759,16 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record) er
 	select {
 	case <-ctx.Done():
 		recordingStatus = "canceled"
-		recordingDuration = r.engine.clock.Now().Sub(startTime)
+		recordingDuration = r.clock.Now().Sub(startTime)
 	case <-r.hangupCh:
 		recordingStatus = "completed"
-		recordingDuration = r.engine.clock.Now().Sub(startTime)
-	case <-r.engine.clock.After(record.TimeoutInSeconds):
+		recordingDuration = r.clock.Now().Sub(startTime)
+	case <-r.clock.After(record.TimeoutInSeconds):
 		// Timeout waiting for speech
 		recordingStatus = "absent"
 		recordingDuration = 0
 		r.addEvent("record.timeout", map[string]any{})
-	case <-r.engine.clock.After(record.MaxLength):
+	case <-r.clock.After(record.MaxLength):
 		// Max length reached
 		recordingStatus = "completed"
 		recordingDuration = record.MaxLength
@@ -783,13 +795,13 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record) er
 	form.Set("RecordingStatus", recordingStatus)
 	form.Set("RecordingDuration", fmt.Sprintf("%.0f", recordingDuration.Seconds()))
 
-	return r.executeActionCallback(ctx, record.Action, form)
+	return r.executeActionCallback(ctx, record.Action, form, currentTwimlDocumentURL)
 }
 
 func (r *CallRunner) executeHangup() error {
 	r.addEvent("twiml.hangup", map[string]any{})
 	r.updateStatus(model.CallCompleted)
-	now := r.engine.clock.Now()
+	now := r.clock.Now()
 	r.engine.mu.Lock()
 	r.call.EndedAt = &now
 	r.engine.mu.Unlock()
@@ -822,7 +834,7 @@ func (r *CallRunner) addEvent(eventType string, detail map[string]any) {
 	r.engine.mu.Lock()
 	defer r.engine.mu.Unlock()
 	r.call.Timeline = append(r.call.Timeline, model.NewEvent(
-		r.engine.clock.Now(),
+		r.clock.Now(),
 		eventType,
 		detail,
 	))
@@ -850,16 +862,49 @@ func (r *CallRunner) buildCallForm() url.Values {
 }
 
 // executeActionCallback calls an action URL with the provided form parameters
-func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string, form url.Values) error {
+func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string, form url.Values, currentTwimlDocumentURL string) error {
 	if actionURL == "" {
 		return nil
 	}
 
-	resp, err := r.fetchTwiML(ctx, actionURL, form)
+	resolvedURL, err := r.resolveActionURL(currentTwimlDocumentURL, actionURL)
+	if err != nil {
+		r.addEvent("action.url_error", map[string]any{
+			"action": actionURL,
+			"base":   currentTwimlDocumentURL,
+			"error":  err.Error(),
+		})
+		return err
+	}
+
+	resp, err := r.fetchTwiML(ctx, resolvedURL, form)
 	if err != nil {
 		return err
 	}
-	return r.executeTwiML(ctx, resp)
+	return r.executeTwiML(ctx, resp, resolvedURL)
+}
+
+// resolveActionURL resolves an action URL relative to the current TwiML document URL
+func (r *CallRunner) resolveActionURL(currentDocURL, actionURL string) (string, error) {
+	target, err := url.Parse(actionURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid action URL %q: %w", actionURL, err)
+	}
+
+	if target.IsAbs() {
+		return target.String(), nil
+	}
+
+	if currentDocURL == "" {
+		return "", fmt.Errorf("cannot resolve relative action URL %q without base", actionURL)
+	}
+
+	base, err := url.Parse(currentDocURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid base URL %q: %w", currentDocURL, err)
+	}
+
+	return base.ResolveReference(target).String(), nil
 }
 
 func (r *CallRunner) removeFromQueue(queue *model.Queue) {
@@ -867,7 +912,7 @@ func (r *CallRunner) removeFromQueue(queue *model.Queue) {
 		if sid == r.call.SID {
 			queue.Members = append(queue.Members[:i], queue.Members[i+1:]...)
 			queue.Timeline = append(queue.Timeline, model.NewEvent(
-				r.engine.clock.Now(),
+				r.clock.Now(),
 				"member.left",
 				map[string]any{"call_sid": r.call.SID},
 			))
@@ -881,7 +926,7 @@ func (r *CallRunner) removeFromConference(conf *model.Conference) {
 		if sid == r.call.SID {
 			conf.Participants = append(conf.Participants[:i], conf.Participants[i+1:]...)
 			conf.Timeline = append(conf.Timeline, model.NewEvent(
-				r.engine.clock.Now(),
+				r.clock.Now(),
 				"participant.left",
 				map[string]any{"call_sid": r.call.SID},
 			))
@@ -889,7 +934,7 @@ func (r *CallRunner) removeFromConference(conf *model.Conference) {
 			// If last participant, mark conference completed
 			if len(conf.Participants) == 0 {
 				conf.Status = model.ConferenceCompleted
-				now := r.engine.clock.Now()
+				now := r.clock.Now()
 				conf.EndedAt = &now
 				conf.Timeline = append(conf.Timeline, model.NewEvent(
 					now,

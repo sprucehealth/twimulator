@@ -51,40 +51,100 @@ func (t *autoTimer) Stop() bool {
 	return t.timer.Stop()
 }
 
-// AutoAdvancableClock uses real time but can be advanced forward
+// AutoAdvancableClock uses real time but can be advanced forward. Internally it
+// keeps a manual clock that is automatically synchronised with wall-clock time
+// and can also be advanced programmatically for deterministic testing.
 type AutoAdvancableClock struct {
-	mu     sync.RWMutex
-	offset time.Duration
+	manual   *ManualClock
+	mu       sync.Mutex
+	lastReal time.Time
+	ticker   *time.Ticker
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
-// NewAutoAdvancableClock creates a clock that uses real time with manual advance capability
+const autoClockSyncInterval = 10 * time.Millisecond
+
+// NewAutoAdvancableClock creates a clock that follows real time but still
+// allows callers to fast-forward time deterministically via Advance.
 func NewAutoAdvancableClock() *AutoAdvancableClock {
-	return &AutoAdvancableClock{}
+	now := time.Now()
+	clock := &AutoAdvancableClock{
+		manual:   NewManualClock(now),
+		lastReal: now,
+		ticker:   time.NewTicker(autoClockSyncInterval),
+		stopCh:   make(chan struct{}),
+	}
+
+	go clock.run()
+
+	return clock
+}
+
+func (c *AutoAdvancableClock) run() {
+	for {
+		select {
+		case <-c.ticker.C:
+			c.syncToRealTime()
+		case <-c.stopCh:
+			c.ticker.Stop()
+			return
+		}
+	}
+}
+
+func (c *AutoAdvancableClock) syncToRealTime() {
+	current := time.Now()
+	c.mu.Lock()
+	delta := current.Sub(c.lastReal)
+	if delta > 0 {
+		c.lastReal = current
+	}
+	c.mu.Unlock()
+
+	if delta > 0 {
+		c.manual.Advance(delta)
+	}
+}
+
+// Stop halts the background synchronisation goroutine. It is safe to call
+// multiple times.
+func (c *AutoAdvancableClock) Stop() {
+	c.stopOnce.Do(func() {
+		close(c.stopCh)
+	})
+}
+
+func (c *AutoAdvancableClock) ensureUpToDate() {
+	c.syncToRealTime()
 }
 
 func (c *AutoAdvancableClock) Now() time.Time {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return time.Now().Add(c.offset)
+	c.ensureUpToDate()
+	return c.manual.Now()
 }
 
 func (c *AutoAdvancableClock) After(d time.Duration) <-chan time.Time {
-	return time.After(d)
+	c.ensureUpToDate()
+	return c.manual.After(d)
 }
 
 func (c *AutoAdvancableClock) Sleep(d time.Duration) {
-	time.Sleep(d)
+	c.ensureUpToDate()
+	c.manual.Sleep(d)
 }
 
 func (c *AutoAdvancableClock) AfterFunc(d time.Duration, f func()) Timer {
-	return &autoTimer{timer: time.AfterFunc(d, f)}
+	c.ensureUpToDate()
+	return c.manual.AfterFunc(d, f)
 }
 
-// Advance moves the clock forward by adding to the offset
+// Advance moves the clock forward by advancing the underlying manual clock.
 func (c *AutoAdvancableClock) Advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.offset += d
+	if d <= 0 {
+		return
+	}
+	c.manual.Advance(d)
 }
 
 // ManualClock provides deterministic time control for testing

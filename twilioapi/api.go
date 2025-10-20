@@ -1,6 +1,8 @@
 package twilioapi
 
 import (
+	"time"
+
 	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
 
 	"twimulator/engine"
@@ -194,4 +196,12 @@ func (c *Client) HangupCall(sid string) error {
 // Snapshot returns the current state snapshot for the client's subaccount
 func (c *Client) Snapshot() (*engine.StateSnapshot, error) {
 	return c.engine.Snapshot(model.SID(c.subaccountSID))
+}
+
+func (c *Client) SetClock(clock engine.Clock) {
+	c.engine.SetClockForAccount(model.SID(c.subaccountSID), clock)
+}
+
+func (c *Client) AdvanceClock(d time.Duration) error {
+	return c.engine.AdvanceForAccount(model.SID(c.subaccountSID), d)
 }
