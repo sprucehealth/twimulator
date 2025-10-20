@@ -138,6 +138,13 @@ func WithAutoClock() EngineOption {
 	}
 }
 
+// WithAutoAdvancableClock configures the engine to use real time with manual advance capability
+func WithAutoAdvancableClock() EngineOption {
+	return func(e *EngineImpl) {
+		e.clock = NewAutoAdvancableClock()
+	}
+}
+
 // WithClock sets a specific clock implementation
 func WithClock(clock Clock) EngineOption {
 	return func(e *EngineImpl) {
@@ -434,7 +441,7 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 		From:                 from,
 		To:                   to,
 		Direction:            model.Inbound,
-		Status:               model.CallInitiated,
+		Status:               model.CallRinging,
 		StartAt:              now,
 		Timeline:             []model.Event{},
 		Variables:            make(map[string]string),
@@ -1551,7 +1558,7 @@ func (e *EngineImpl) SetAutoTime(enabled bool) {
 	}
 }
 
-// Advance advances the manual clock (no-op for auto clock)
+// Advance advances the manual clock or auto-advancable clock (no-op for pure auto clock)
 func (e *EngineImpl) Advance(d time.Duration) {
 	e.mu.RLock()
 	clock := e.clock
@@ -1559,6 +1566,8 @@ func (e *EngineImpl) Advance(d time.Duration) {
 
 	if mc, ok := clock.(*ManualClock); ok {
 		mc.Advance(d)
+	} else if aac, ok := clock.(*AutoAdvancableClock); ok {
+		aac.Advance(d)
 	}
 }
 

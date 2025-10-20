@@ -51,6 +51,42 @@ func (t *autoTimer) Stop() bool {
 	return t.timer.Stop()
 }
 
+// AutoAdvancableClock uses real time but can be advanced forward
+type AutoAdvancableClock struct {
+	mu     sync.RWMutex
+	offset time.Duration
+}
+
+// NewAutoAdvancableClock creates a clock that uses real time with manual advance capability
+func NewAutoAdvancableClock() *AutoAdvancableClock {
+	return &AutoAdvancableClock{}
+}
+
+func (c *AutoAdvancableClock) Now() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return time.Now().Add(c.offset)
+}
+
+func (c *AutoAdvancableClock) After(d time.Duration) <-chan time.Time {
+	return time.After(d)
+}
+
+func (c *AutoAdvancableClock) Sleep(d time.Duration) {
+	time.Sleep(d)
+}
+
+func (c *AutoAdvancableClock) AfterFunc(d time.Duration, f func()) Timer {
+	return &autoTimer{timer: time.AfterFunc(d, f)}
+}
+
+// Advance moves the clock forward by adding to the offset
+func (c *AutoAdvancableClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.offset += d
+}
+
 // ManualClock provides deterministic time control for testing
 type ManualClock struct {
 	mu      sync.RWMutex
