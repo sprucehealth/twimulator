@@ -37,6 +37,11 @@ func (c *Client) ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingPhone
 	return c.engine.ListIncomingPhoneNumber(params)
 }
 
+// UpdateIncomingPhoneNumber updates a provisioned phone number
+func (c *Client) UpdateIncomingPhoneNumber(sid string, params *twilioopenapi.UpdateIncomingPhoneNumberParams) (*twilioopenapi.ApiV2010IncomingPhoneNumber, error) {
+	return c.engine.UpdateIncomingPhoneNumber(sid, params)
+}
+
 // DeleteIncomingPhoneNumber removes a provisioned number
 func (c *Client) DeleteIncomingPhoneNumber(sid string, params *twilioopenapi.DeleteIncomingPhoneNumberParams) error {
 	return c.engine.DeleteIncomingPhoneNumber(sid, params)

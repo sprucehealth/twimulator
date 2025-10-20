@@ -901,3 +901,108 @@ func TestPlayInvalidURL(t *testing.T) {
 		t.Error("Expected play.error event in timeline")
 	}
 }
+
+func TestUpdateIncomingPhoneNumber(t *testing.T) {
+	e := engine.NewEngine(engine.WithManualClock())
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+
+	// Create two applications
+	app1, err := e.CreateApplication((&twilioopenapi.CreateApplicationParams{}).
+		SetPathAccountSid(string(subAccount.SID)).
+		SetFriendlyName("App 1"))
+	if err != nil {
+		t.Fatalf("create application 1 failed: %v", err)
+	}
+	if app1.Sid == nil {
+		t.Fatal("expected application 1 SID")
+	}
+
+	app2, err := e.CreateApplication((&twilioopenapi.CreateApplicationParams{}).
+		SetPathAccountSid(string(subAccount.SID)).
+		SetFriendlyName("App 2"))
+	if err != nil {
+		t.Fatalf("create application 2 failed: %v", err)
+	}
+	if app2.Sid == nil {
+		t.Fatal("expected application 2 SID")
+	}
+
+	// Create a phone number with app1
+	numberParams := (&twilioopenapi.CreateIncomingPhoneNumberParams{}).
+		SetPathAccountSid(string(subAccount.SID)).
+		SetPhoneNumber("+15551234567").
+		SetVoiceApplicationSid(*app1.Sid)
+	number, err := e.CreateIncomingPhoneNumber(numberParams)
+	if err != nil {
+		t.Fatalf("create incoming phone number failed: %v", err)
+	}
+	if number.Sid == nil {
+		t.Fatal("expected phone number SID")
+	}
+
+	// Verify initial state
+	if number.VoiceApplicationSid == nil || *number.VoiceApplicationSid != *app1.Sid {
+		t.Fatalf("expected voice application sid %s, got %v", *app1.Sid, number.VoiceApplicationSid)
+	}
+
+	// Update to app2
+	updateParams := (&twilioopenapi.UpdateIncomingPhoneNumberParams{}).
+		SetVoiceApplicationSid(*app2.Sid)
+	updated, err := e.UpdateIncomingPhoneNumber(*number.Sid, updateParams)
+	if err != nil {
+		t.Fatalf("update incoming phone number failed: %v", err)
+	}
+
+	// Verify update
+	if updated.Sid == nil || *updated.Sid != *number.Sid {
+		t.Fatalf("expected same SID %s, got %v", *number.Sid, updated.Sid)
+	}
+	if updated.PhoneNumber == nil || *updated.PhoneNumber != "+15551234567" {
+		t.Fatalf("expected phone number +15551234567, got %v", updated.PhoneNumber)
+	}
+	if updated.VoiceApplicationSid == nil || *updated.VoiceApplicationSid != *app2.Sid {
+		t.Fatalf("expected voice application sid %s, got %v", *app2.Sid, updated.VoiceApplicationSid)
+	}
+
+	// Verify persistence via List
+	listParams := (&twilioopenapi.ListIncomingPhoneNumberParams{}).
+		SetPathAccountSid(string(subAccount.SID)).
+		SetPhoneNumber("+15551234567")
+	numbers, err := e.ListIncomingPhoneNumber(listParams)
+	if err != nil {
+		t.Fatalf("list incoming phone numbers failed: %v", err)
+	}
+	if len(numbers) != 1 {
+		t.Fatalf("expected 1 number, got %d", len(numbers))
+	}
+	if numbers[0].VoiceApplicationSid == nil || *numbers[0].VoiceApplicationSid != *app2.Sid {
+		t.Fatalf("expected persisted voice application sid %s, got %v", *app2.Sid, numbers[0].VoiceApplicationSid)
+	}
+
+	// Clear the application association
+	clearParams := (&twilioopenapi.UpdateIncomingPhoneNumberParams{}).
+		SetVoiceApplicationSid("")
+	cleared, err := e.UpdateIncomingPhoneNumber(*number.Sid, clearParams)
+	if err != nil {
+		t.Fatalf("clear voice application failed: %v", err)
+	}
+	if cleared.VoiceApplicationSid != nil {
+		t.Fatalf("expected nil voice application sid, got %v", *cleared.VoiceApplicationSid)
+	}
+
+	// Update with non-existent application should fail
+	invalidParams := (&twilioopenapi.UpdateIncomingPhoneNumberParams{}).
+		SetVoiceApplicationSid("AP00000000000000000000000000000000")
+	_, err = e.UpdateIncomingPhoneNumber(*number.Sid, invalidParams)
+	if err == nil {
+		t.Fatal("expected error when updating with non-existent application")
+	}
+
+	// Update non-existent number should fail
+	_, err = e.UpdateIncomingPhoneNumber("PN00000000000000000000000000000000", updateParams)
+	if err == nil {
+		t.Fatal("expected error when updating non-existent number")
+	}
+}

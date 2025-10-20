@@ -23,6 +23,7 @@ type Engine interface {
 	ListAccount(params *twilioopenapi.ListAccountParams) ([]twilioopenapi.ApiV2010Account, error)
 	CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncomingPhoneNumberParams) (*twilioopenapi.ApiV2010IncomingPhoneNumber, error)
 	ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingPhoneNumberParams) ([]twilioopenapi.ApiV2010IncomingPhoneNumber, error)
+	UpdateIncomingPhoneNumber(sid string, params *twilioopenapi.UpdateIncomingPhoneNumberParams) (*twilioopenapi.ApiV2010IncomingPhoneNumber, error)
 	DeleteIncomingPhoneNumber(sid string, params *twilioopenapi.DeleteIncomingPhoneNumberParams) error
 	CreateApplication(params *twilioopenapi.CreateApplicationParams) (*twilioopenapi.ApiV2010Application, error)
 	CreateQueue(params *twilioopenapi.CreateQueueParams) (*twilioopenapi.ApiV2010Queue, error)
@@ -520,6 +521,85 @@ func (e *EngineImpl) ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingP
 	}
 
 	return result, nil
+}
+
+// UpdateIncomingPhoneNumber updates a provisioned phone number
+func (e *EngineImpl) UpdateIncomingPhoneNumber(sid string, params *twilioopenapi.UpdateIncomingPhoneNumberParams) (*twilioopenapi.ApiV2010IncomingPhoneNumber, error) {
+	if params == nil {
+		return nil, fmt.Errorf("params is required")
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Find the incoming number by SID across all subaccounts
+	var foundNumber *incomingNumber
+	var foundPhone string
+	var foundAccountSID model.SID
+	for accountSID, numbers := range e.incomingNumbers {
+		for phone, rec := range numbers {
+			if string(rec.SID) == sid {
+				foundNumber = rec
+				foundPhone = phone
+				foundAccountSID = accountSID
+				break
+			}
+		}
+		if foundNumber != nil {
+			break
+		}
+	}
+
+	if foundNumber == nil {
+		return nil, fmt.Errorf("incoming phone number %s not found", sid)
+	}
+
+	// Update VoiceApplicationSid if provided
+	if params.VoiceApplicationSid != nil {
+		appSIDStr := *params.VoiceApplicationSid
+		if appSIDStr == "" {
+			// Clear the application association
+			foundNumber.VoiceApplication = nil
+		} else {
+			// Validate the application exists for this account
+			appSID := model.SID(appSIDStr)
+			if apps := e.applications[foundAccountSID]; apps == nil || apps[appSID] == nil {
+				return nil, fmt.Errorf("application %s not found for account %s", appSID, foundAccountSID)
+			}
+			foundNumber.VoiceApplication = &appSID
+		}
+
+		// Update the SubAccount's IncomingNumbers list
+		if subAccount := e.subAccounts[foundAccountSID]; subAccount != nil {
+			for i := range subAccount.IncomingNumbers {
+				if subAccount.IncomingNumbers[i].SID == string(foundNumber.SID) {
+					if foundNumber.VoiceApplication != nil {
+						appCopy := string(*foundNumber.VoiceApplication)
+						subAccount.IncomingNumbers[i].VoiceApplicationSID = &appCopy
+					} else {
+						subAccount.IncomingNumbers[i].VoiceApplicationSID = nil
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Build response
+	sidStr := string(foundNumber.SID)
+	phoneCopy := foundPhone
+	created := foundNumber.CreatedAt.UTC().Format(time.RFC1123Z)
+	resp := &twilioopenapi.ApiV2010IncomingPhoneNumber{
+		Sid:         &sidStr,
+		PhoneNumber: &phoneCopy,
+		DateCreated: &created,
+	}
+	if foundNumber.VoiceApplication != nil {
+		appCopy := string(*foundNumber.VoiceApplication)
+		resp.VoiceApplicationSid = &appCopy
+	}
+
+	return resp, nil
 }
 
 // DeleteIncomingPhoneNumber removes a provisioned number
