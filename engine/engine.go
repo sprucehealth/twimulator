@@ -279,11 +279,11 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		return nil, fmt.Errorf("PathAccountSid is required")
 	}
 
-	answerURL := ""
+	url := ""
 	if params.Url != nil {
-		answerURL = *params.Url
+		url = *params.Url
 	}
-	if answerURL == "" {
+	if url == "" {
 		return nil, fmt.Errorf("Url is required")
 	}
 
@@ -345,7 +345,7 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		StartAt:              now,
 		Timeline:             []model.Event{},
 		Variables:            make(map[string]string),
-		Url:                  answerURL,
+		Url:                  url,
 		StatusCallback:       statusCallback,
 		StatusCallbackEvents: statusEvents,
 	}

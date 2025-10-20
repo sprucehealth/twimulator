@@ -187,7 +187,7 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node) error {
 	case *twiml.Say:
 		return r.executeSay(n)
 	case *twiml.Play:
-		return r.executePlay(n)
+		return r.executePlay(ctx, n)
 	case *twiml.Pause:
 		return r.executePause(ctx, n)
 	case *twiml.Gather:
@@ -215,10 +215,39 @@ func (r *CallRunner) executeSay(say *twiml.Say) error {
 	return nil
 }
 
-func (r *CallRunner) executePlay(play *twiml.Play) error {
+func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
+	// Log the play attempt
 	r.addEvent("twiml.play", map[string]any{
 		"url": play.URL,
 	})
+
+	// Fetch the media URL to ensure it's accessible
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	status, _, _, err := r.engine.webhook.GET(reqCtx, play.URL)
+	if err != nil {
+		r.addEvent("play.error", map[string]any{
+			"url":   play.URL,
+			"error": err.Error(),
+		})
+		return fmt.Errorf("failed to fetch play URL %s: %w", play.URL, err)
+	}
+
+	// Check for non-2xx status codes
+	if status < 200 || status >= 300 {
+		r.addEvent("play.error", map[string]any{
+			"url":    play.URL,
+			"status": status,
+		})
+		return fmt.Errorf("play URL %s returned status %d", play.URL, status)
+	}
+
+	r.addEvent("play.success", map[string]any{
+		"url":    play.URL,
+		"status": status,
+	})
+
 	return nil
 }
 

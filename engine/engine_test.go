@@ -783,3 +783,121 @@ func TestCreateApplication(t *testing.T) {
 		t.Fatalf("expected status callback method GET, got %s", appInfo.StatusCallbackMethod)
 	}
 }
+
+func TestPlayFetchesURL(t *testing.T) {
+	mock := httpstub.NewMockWebhookClient()
+	mediaURLFetched := false
+
+	mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
+		if targetURL == "http://test/answer" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Play>http://test/media/hello.mp3</Play>
+  <Hangup/>
+</Response>`), make(http.Header), nil
+		}
+		if targetURL == "http://test/media/hello.mp3" {
+			mediaURLFetched = true
+			// Return a fake audio file
+			return 200, []byte("fake audio data"), make(http.Header), nil
+		}
+		return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
+	}
+
+	e := engine.NewEngine(
+		engine.WithManualClock(),
+		engine.WithWebhookClient(mock),
+	)
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
+
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
+
+	time.Sleep(10 * time.Millisecond)
+	err := e.AnswerCall(call.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Advance(2 * time.Second)
+	time.Sleep(10 * time.Millisecond)
+
+	if !mediaURLFetched {
+		t.Error("Play URL was not fetched")
+	}
+
+	// Verify call completed after play and hangup
+	got, _ := e.GetCallState(call.SID)
+	if got.Status != model.CallCompleted {
+		t.Errorf("Expected completed, got %s", got.Status)
+	}
+
+	// Check for play.success event
+	hasPlaySuccess := false
+	for _, event := range got.Timeline {
+		if event.Type == "play.success" {
+			hasPlaySuccess = true
+			break
+		}
+	}
+	if !hasPlaySuccess {
+		t.Error("Expected play.success event in timeline")
+	}
+}
+
+func TestPlayInvalidURL(t *testing.T) {
+	mock := httpstub.NewMockWebhookClient()
+
+	mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
+		if targetURL == "http://test/answer" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Play>http://test/media/missing.mp3</Play>
+  <Hangup/>
+</Response>`), make(http.Header), nil
+		}
+		if targetURL == "http://test/media/missing.mp3" {
+			// Return 404 for missing file
+			return 404, []byte("Not Found"), make(http.Header), nil
+		}
+		return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
+	}
+
+	e := engine.NewEngine(
+		engine.WithManualClock(),
+		engine.WithWebhookClient(mock),
+	)
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
+
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
+
+	time.Sleep(10 * time.Millisecond)
+	err := e.AnswerCall(call.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Advance(2 * time.Second)
+	time.Sleep(10 * time.Millisecond)
+
+	// Call should fail due to invalid play URL
+	got, _ := e.GetCallState(call.SID)
+	if got.Status != model.CallFailed {
+		t.Errorf("Expected failed status due to invalid play URL, got %s", got.Status)
+	}
+
+	// Check for play.error event
+	hasPlayError := false
+	for _, event := range got.Timeline {
+		if event.Type == "play.error" {
+			hasPlayError = true
+			break
+		}
+	}
+	if !hasPlayError {
+		t.Error("Expected play.error event in timeline")
+	}
+}

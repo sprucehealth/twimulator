@@ -13,6 +13,7 @@ import (
 // WebhookClient defines the interface for making webhook HTTP calls
 type WebhookClient interface {
 	POST(ctx context.Context, url string, form url.Values) (status int, body []byte, headers http.Header, err error)
+	GET(ctx context.Context, url string) (status int, body []byte, headers http.Header, err error)
 }
 
 // DefaultWebhookClient is the default implementation using http.Client
@@ -42,6 +43,29 @@ func (c *DefaultWebhookClient) POST(ctx context.Context, targetURL string, form 
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "Twimulator/1.0")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, resp.Header, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	return resp.StatusCode, body, resp.Header, nil
+}
+
+// GET makes an HTTP GET request
+func (c *DefaultWebhookClient) GET(ctx context.Context, targetURL string) (status int, body []byte, headers http.Header, err error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
 	req.Header.Set("User-Agent", "Twimulator/1.0")
 
 	resp, err := c.client.Do(req)
@@ -98,6 +122,23 @@ func (m *MockWebhookClient) POST(ctx context.Context, targetURL string, form url
 	}
 
 	return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
+}
+
+// GET records the call and returns the configured response
+func (m *MockWebhookClient) GET(ctx context.Context, targetURL string) (status int, body []byte, headers http.Header, err error) {
+	m.Calls = append(m.Calls, MockCall{
+		URL:     targetURL,
+		Form:    nil, // No form data for GET requests
+		Time:    time.Now(),
+		Context: ctx,
+	})
+
+	if m.ResponseFunc != nil {
+		return m.ResponseFunc(targetURL, nil)
+	}
+
+	// Default: return empty response for media files
+	return 200, []byte{}, make(http.Header), nil
 }
 
 // Reset clears all recorded calls
