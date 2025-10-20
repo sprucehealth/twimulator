@@ -50,7 +50,11 @@ func NewCallRunner(call *model.Call, engine *EngineImpl, timeout time.Duration) 
 // Run executes the call lifecycle
 func (r *CallRunner) Run(ctx context.Context) {
 	defer close(r.done)
-
+	if r.call.Direction == model.Inbound {
+		// backend auto-answers an inbound call
+		r.answer(ctx)
+		return
+	}
 	// Transition to ringing
 	r.updateStatus(model.CallRinging)
 
@@ -719,11 +723,11 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record) er
 	startTime := r.engine.clock.Now()
 
 	r.addEvent("twiml.record", map[string]any{
-		"max_length":    record.MaxLength.Seconds(),
-		"play_beep":     record.PlayBeep,
-		"action":        record.Action,
-		"transcribe":    record.Transcribe,
-		"timeout":       record.TimeoutInSeconds.Seconds(),
+		"max_length": record.MaxLength.Seconds(),
+		"play_beep":  record.PlayBeep,
+		"action":     record.Action,
+		"transcribe": record.Transcribe,
+		"timeout":    record.TimeoutInSeconds.Seconds(),
 	})
 
 	r.engine.mu.Lock()

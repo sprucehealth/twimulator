@@ -114,11 +114,6 @@ func TestCreateIncomingCall(t *testing.T) {
 
 	// Answer the call and let it execute
 	time.Sleep(10 * time.Millisecond)
-	err = e.AnswerCall(callSID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	e.Advance(2 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 
