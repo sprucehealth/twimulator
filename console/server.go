@@ -125,7 +125,7 @@ func (cs *ConsoleServer) handleSubAccounts(w http.ResponseWriter, r *http.Reques
 		views = append(views, toAccountView(acct))
 	}
 
-	snap := cs.engine.Snapshot()
+	snap := cs.engine.SnapshotAll()
 	for i := range views {
 		if sa, ok := snap.SubAccounts[model.SID(views[i].SID)]; ok {
 			appLookup := make(map[string]applicationView, len(sa.Applications))
@@ -208,7 +208,7 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 	}
 
 	accountModelSID := model.SID(accountSID)
-	snap := cs.engine.Snapshot()
+	snap := cs.engine.SnapshotAll()
 	subAccountModel, ok := snap.SubAccounts[accountModelSID]
 	if !ok {
 		http.NotFound(w, r)
@@ -301,7 +301,7 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	snap := cs.engine.Snapshot()
+	snap := cs.engine.SnapshotAll()
 	call, exists := snap.Calls[model.SID(sid)]
 	if !exists {
 		http.NotFound(w, r)
@@ -318,7 +318,7 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 }
 
 func (cs *ConsoleServer) handleSnapshot(w http.ResponseWriter, r *http.Request) {
-	snap := cs.engine.Snapshot()
+	snap := cs.engine.SnapshotAll()
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(snap); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -356,7 +356,7 @@ func (cs *ConsoleServer) handleNumberDetail(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	snap := cs.engine.Snapshot()
+	snap := cs.engine.SnapshotAll()
 	var number numberView
 	var accountName string
 	found := false

@@ -95,8 +95,8 @@ func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopen
 }
 
 // CreateIncomingCall simulates an incoming call to a provisioned number with an application
-func (c *Client) CreateIncomingCall(accountSID model.SID, from string, to string) (*twilioopenapi.ApiV2010Call, error) {
-	return c.engine.CreateIncomingCall(accountSID, from, to)
+func (c *Client) CreateIncomingCall(from string, to string) (*twilioopenapi.ApiV2010Call, error) {
+	return c.engine.CreateIncomingCall(model.SID(c.subaccountSID), from, to)
 }
 
 // UpdateCall proxies call updates to the engine
@@ -189,4 +189,9 @@ func (c *Client) SetCallFailed(sid string) error {
 // HangupCall terminates a call
 func (c *Client) HangupCall(sid string) error {
 	return c.engine.Hangup(model.SID(sid))
+}
+
+// Snapshot returns the current state snapshot for the client's subaccount
+func (c *Client) Snapshot() (*engine.StateSnapshot, error) {
+	return c.engine.Snapshot(model.SID(c.subaccountSID))
 }

@@ -49,7 +49,8 @@ type Engine interface {
 	ListCalls(filter CallFilter) []*model.Call
 	GetQueue(accountSID model.SID, name string) (*model.Queue, bool)
 	GetConference(accountSID model.SID, name string) (*model.Conference, bool)
-	Snapshot() *StateSnapshot
+	Snapshot(accountSID model.SID) (*StateSnapshot, error)
+	SnapshotAll() *StateSnapshot
 
 	// Time control
 	SetAutoTime(enabled bool)
@@ -1367,8 +1368,76 @@ func (e *EngineImpl) GetConference(accountSID model.SID, name string) (*model.Co
 	return nil, false
 }
 
-// Snapshot returns a deep copy of the current state
-func (e *EngineImpl) Snapshot() *StateSnapshot {
+// Snapshot returns a deep copy of the current state for a specific subaccount
+func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	// Validate subaccount exists
+	subAccount, exists := e.subAccounts[accountSID]
+	if !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	snap := &StateSnapshot{
+		Calls:       make(map[model.SID]*model.Call),
+		Queues:      make(map[string]*model.Queue),
+		Conferences: make(map[string]*model.Conference),
+		SubAccounts: make(map[model.SID]*model.SubAccount),
+		Timestamp:   e.clock.Now(),
+	}
+
+	// Only include calls for this subaccount
+	for sid, call := range e.calls {
+		if call.AccountSID != accountSID {
+			continue
+		}
+		callCopy := *call
+		callCopy.Timeline = append([]model.Event{}, call.Timeline...)
+		callCopy.Variables = make(map[string]string)
+		for k, v := range call.Variables {
+			callCopy.Variables[k] = v
+		}
+		snap.Calls[sid] = &callCopy
+	}
+
+	// Only include queues for this subaccount
+	if queues, exists := e.queues[accountSID]; exists {
+		for name, queue := range queues {
+			queueCopy := *queue
+			queueCopy.Members = append([]model.SID{}, queue.Members...)
+			queueCopy.Timeline = append([]model.Event{}, queue.Timeline...)
+			snap.Queues[name] = &queueCopy
+		}
+	}
+
+	// Only include conferences for this subaccount
+	if confs, exists := e.conferences[accountSID]; exists {
+		for name, conf := range confs {
+			confCopy := *conf
+			confCopy.Participants = append([]model.SID{}, conf.Participants...)
+			confCopy.Timeline = append([]model.Event{}, conf.Timeline...)
+			snap.Conferences[name] = &confCopy
+		}
+	}
+
+	// Only include this subaccount
+	saCopy := *subAccount
+	if subAccount.IncomingNumbers != nil {
+		saCopy.IncomingNumbers = append([]model.IncomingNumber{}, subAccount.IncomingNumbers...)
+	}
+	if subAccount.Applications != nil {
+		apps := make([]model.Application, len(subAccount.Applications))
+		copy(apps, subAccount.Applications)
+		saCopy.Applications = apps
+	}
+	snap.SubAccounts[accountSID] = &saCopy
+
+	return snap, nil
+}
+
+// SnapshotAll returns a deep copy of the current state for all subaccounts
+func (e *EngineImpl) SnapshotAll() *StateSnapshot {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -1380,6 +1449,7 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 		Timestamp:   e.clock.Now(),
 	}
 
+	// Include all calls
 	for sid, call := range e.calls {
 		callCopy := *call
 		callCopy.Timeline = append([]model.Event{}, call.Timeline...)
@@ -1390,7 +1460,7 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 		snap.Calls[sid] = &callCopy
 	}
 
-	// Flatten queues from all subaccounts into single map
+	// Flatten queues from all subaccounts
 	for _, queues := range e.queues {
 		for name, queue := range queues {
 			queueCopy := *queue
@@ -1400,7 +1470,7 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 		}
 	}
 
-	// Flatten conferences from all subaccounts into single map
+	// Flatten conferences from all subaccounts
 	for _, confs := range e.conferences {
 		for name, conf := range confs {
 			confCopy := *conf
@@ -1410,6 +1480,7 @@ func (e *EngineImpl) Snapshot() *StateSnapshot {
 		}
 	}
 
+	// Include all subaccounts
 	for sid, sa := range e.subAccounts {
 		saCopy := *sa
 		if sa.IncomingNumbers != nil {

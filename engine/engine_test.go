@@ -135,7 +135,10 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	}
 
 	// Verify snapshot works
-	snap := e.Snapshot()
+	snap, err := e.Snapshot(subAccount.SID)
+	if err != nil {
+		t.Fatalf("Snapshot failed: %v", err)
+	}
 	if len(snap.Calls) != 2 {
 		t.Fatalf("Expected 2 calls in snapshot, got %d", len(snap.Calls))
 	}
@@ -519,7 +522,10 @@ func createTestSubAccount(t *testing.T, e *engine.EngineImpl, friendlyName strin
 		t.Fatal("expected account SID to be set")
 	}
 	sid := model.SID(*account.Sid)
-	snap := e.Snapshot()
+	snap, err := e.Snapshot(sid)
+	if err != nil {
+		t.Fatalf("snapshot failed: %v", err)
+	}
 	subAccount, ok := snap.SubAccounts[sid]
 	if !ok {
 		t.Fatalf("subaccount %s not found after creation", sid)
@@ -758,7 +764,10 @@ func TestCreateApplication(t *testing.T) {
 		t.Fatal("expected application SID")
 	}
 
-	snap := e.Snapshot()
+	snap, err := e.Snapshot(subAccount.SID)
+	if err != nil {
+		t.Fatalf("Snapshot failed: %v", err)
+	}
 	sa := snap.SubAccounts[subAccount.SID]
 	if sa == nil || len(sa.Applications) != 1 {
 		t.Fatalf("expected application recorded on subaccount")
