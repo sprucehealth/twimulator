@@ -87,6 +87,18 @@ type Hangup struct{}
 
 func (Hangup) isNode() {}
 
+// Record records the caller's voice
+type Record struct {
+	MaxLength        time.Duration
+	PlayBeep         bool
+	Action           string
+	Method           string
+	Transcribe       bool
+	TimeoutInSeconds time.Duration
+}
+
+func (Record) isNode() {}
+
 // Number is used inside <Dial> to specify a phone number
 type Number struct {
 	Number string

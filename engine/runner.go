@@ -198,6 +198,8 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node) error {
 		return r.executeEnqueue(ctx, n)
 	case *twiml.Redirect:
 		return r.executeRedirect(ctx, n)
+	case *twiml.Record:
+		return r.executeRecord(ctx, n)
 	case *twiml.Hangup:
 		return r.executeHangup()
 	default:
@@ -711,6 +713,73 @@ func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redire
 	}
 
 	return r.executeTwiML(ctx, resp)
+}
+
+func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record) error {
+	startTime := r.engine.clock.Now()
+
+	r.addEvent("twiml.record", map[string]any{
+		"max_length":    record.MaxLength.Seconds(),
+		"play_beep":     record.PlayBeep,
+		"action":        record.Action,
+		"transcribe":    record.Transcribe,
+		"timeout":       record.TimeoutInSeconds.Seconds(),
+	})
+
+	r.engine.mu.Lock()
+	r.call.CurrentEndpoint = "recording"
+	r.engine.mu.Unlock()
+
+	// Simulate beep if enabled
+	if record.PlayBeep {
+		r.addEvent("record.beep", map[string]any{})
+	}
+
+	// Wait for timeout, maxLength, or hangup
+	// In a real implementation, this would wait for silence detection or user hangup
+	var recordingDuration time.Duration
+	var recordingStatus string
+
+	select {
+	case <-ctx.Done():
+		recordingStatus = "canceled"
+		recordingDuration = r.engine.clock.Now().Sub(startTime)
+	case <-r.hangupCh:
+		recordingStatus = "completed"
+		recordingDuration = r.engine.clock.Now().Sub(startTime)
+	case <-r.engine.clock.After(record.TimeoutInSeconds):
+		// Timeout waiting for speech
+		recordingStatus = "absent"
+		recordingDuration = 0
+		r.addEvent("record.timeout", map[string]any{})
+	case <-r.engine.clock.After(record.MaxLength):
+		// Max length reached
+		recordingStatus = "completed"
+		recordingDuration = record.MaxLength
+		r.addEvent("record.max_length", map[string]any{})
+	}
+
+	r.engine.mu.Lock()
+	r.call.CurrentEndpoint = ""
+	r.engine.mu.Unlock()
+
+	// Generate a fake recording SID
+	recordingSID := model.NewRecordingSID()
+
+	r.addEvent("record.completed", map[string]any{
+		"recording_sid":      recordingSID,
+		"recording_duration": recordingDuration.Seconds(),
+		"recording_status":   recordingStatus,
+	})
+
+	// Call action callback with recording results
+	form := url.Values{}
+	form.Set("RecordingSid", string(recordingSID))
+	form.Set("RecordingUrl", fmt.Sprintf("https://api.twilio.com/2010-04-01/Accounts/%s/Recordings/%s", r.call.AccountSID, recordingSID))
+	form.Set("RecordingStatus", recordingStatus)
+	form.Set("RecordingDuration", fmt.Sprintf("%.0f", recordingDuration.Seconds()))
+
+	return r.executeActionCallback(ctx, record.Action, form)
 }
 
 func (r *CallRunner) executeHangup() error {

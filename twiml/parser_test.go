@@ -276,3 +276,70 @@ func TestParseMultipleVerbs(t *testing.T) {
 		t.Errorf("Child 3 should be Hangup")
 	}
 }
+
+func TestParseRecord(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Record maxLength="30" playBeep="true" action="http://example.com/recording" transcribe="true" timeout="5"/>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	record, ok := resp.Children[0].(*Record)
+	if !ok {
+		t.Fatalf("Expected *Record, got %T", resp.Children[0])
+	}
+
+	if record.MaxLength != 30*time.Second {
+		t.Errorf("Expected maxLength 30s, got %v", record.MaxLength)
+	}
+	if !record.PlayBeep {
+		t.Error("Expected playBeep true")
+	}
+	if record.Action != "http://example.com/recording" {
+		t.Errorf("Expected action URL, got %q", record.Action)
+	}
+	if !record.Transcribe {
+		t.Error("Expected transcribe true")
+	}
+	if record.TimeoutInSeconds != 5*time.Second {
+		t.Errorf("Expected timeout 5s, got %v", record.TimeoutInSeconds)
+	}
+}
+
+func TestParseRecordDefaults(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Record/>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	record, ok := resp.Children[0].(*Record)
+	if !ok {
+		t.Fatalf("Expected *Record, got %T", resp.Children[0])
+	}
+
+	// Check defaults
+	if record.MaxLength != 3600*time.Second {
+		t.Errorf("Expected default maxLength 3600s, got %v", record.MaxLength)
+	}
+	if !record.PlayBeep {
+		t.Error("Expected default playBeep true")
+	}
+	if record.Method != "POST" {
+		t.Errorf("Expected default method POST, got %q", record.Method)
+	}
+	if record.Transcribe {
+		t.Error("Expected default transcribe false")
+	}
+	if record.TimeoutInSeconds != 5*time.Second {
+		t.Errorf("Expected default timeout 5s, got %v", record.TimeoutInSeconds)
+	}
+}

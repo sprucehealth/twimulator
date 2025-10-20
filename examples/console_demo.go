@@ -138,6 +138,34 @@ func main() {
 </Response>`, message)
 	})
 
+	// Record demo handler
+	mux.HandleFunc("/voice/record", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Record call from %s", r.FormValue("From"))
+		w.Header().Set("Content-Type", "text/xml")
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>Please leave a message after the beep. Press the pound key when finished.</Say>
+  <Record maxLength="30" playBeep="true" action="%s/voice/record-done" timeout="5" transcribe="true"/>
+</Response>`, testSrv.URL)
+	})
+
+	mux.HandleFunc("/voice/record-done", func(w http.ResponseWriter, r *http.Request) {
+		recordingSid := r.FormValue("RecordingSid")
+		recordingUrl := r.FormValue("RecordingUrl")
+		recordingStatus := r.FormValue("RecordingStatus")
+		recordingDuration := r.FormValue("RecordingDuration")
+
+		log.Printf("Recording completed: SID=%s, URL=%s, Status=%s, Duration=%s seconds",
+			recordingSid, recordingUrl, recordingStatus, recordingDuration)
+
+		w.Header().Set("Content-Type", "text/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>Thank you for your message. Goodbye.</Say>
+  <Hangup/>
+</Response>`)
+	})
+
 	// Status callback handler
 	mux.HandleFunc("/voice/status", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Status callback: CallSid=%s Status=%s", r.FormValue("CallSid"), r.FormValue("CallStatus"))
@@ -241,6 +269,17 @@ func main() {
 		log.Println("5. Simulating digit press (2 for support)...")
 		e.SendDigits(call3.SID, "2")
 		time.Sleep(2 * time.Second)
+
+		log.Println("6. Creating voicemail/record demo call...")
+		call4 := createCall(newCallParams("+15551234005", "+18005551004", testSrv.URL+"/voice/record"))
+		log.Printf("   Created call %s\n", call4.SID)
+		time.Sleep(1 * time.Second)
+		e.AnswerCall(call4.SID)
+		log.Printf("   Answered call %s\n", call4.SID)
+		time.Sleep(3 * time.Second)
+		log.Println("   Simulating caller leaving message (waiting for timeout)...")
+		time.Sleep(6 * time.Second)
+		log.Printf("   Recording completed for call %s\n", call4.SID)
 
 		log.Println("")
 		log.Println("=== Demo scenario complete! ===")

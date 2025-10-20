@@ -140,6 +140,7 @@ var (
 	subAccountCounter  uint64
 	phoneNumberCounter uint64
 	applicationCounter uint64
+	recordingCounter   uint64
 )
 
 // NewCallSID generates a new Call SID (CAFAKE prefix, 34 chars total)
@@ -190,6 +191,14 @@ func NewPhoneNumberSID() SID {
 	b := make([]byte, 7)
 	rand.Read(b)
 	return SID(fmt.Sprintf("PNFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
+}
+
+// NewRecordingSID generates a new Recording SID (REFAKE prefix, 34 chars total)
+func NewRecordingSID() SID {
+	counter := atomic.AddUint64(&recordingCounter, 1)
+	b := make([]byte, 7)
+	rand.Read(b)
+	return SID(fmt.Sprintf("REFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
 }
 
 // NewAuthToken generates a pseudo-random auth token for subaccounts

@@ -1107,3 +1107,270 @@ func TestSIDLength(t *testing.T) {
 		t.Errorf("Conference SID expected to start with CFFAKE, got: %s", conf.SID)
 	}
 }
+
+func TestRecordWithAction(t *testing.T) {
+	mock := httpstub.NewMockWebhookClient()
+	recordActionCalled := false
+
+	mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
+		if targetURL == "http://test/answer" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Record maxLength="10" playBeep="true" action="http://test/record-done" timeout="3"/>
+  <Hangup/>
+</Response>`), make(http.Header), nil
+		}
+		if targetURL == "http://test/record-done" {
+			recordActionCalled = true
+			recordingSid := form.Get("RecordingSid")
+			recordingUrl := form.Get("RecordingUrl")
+			recordingStatus := form.Get("RecordingStatus")
+			recordingDuration := form.Get("RecordingDuration")
+
+			if recordingSid == "" {
+				t.Errorf("Expected RecordingSid, got empty")
+			}
+			if len(recordingSid) != 34 {
+				t.Errorf("Expected RecordingSid length 34, got %d: %s", len(recordingSid), recordingSid)
+			}
+			if recordingSid[:6] != "REFAKE" {
+				t.Errorf("Expected RecordingSid to start with REFAKE, got: %s", recordingSid)
+			}
+			if recordingUrl == "" {
+				t.Errorf("Expected RecordingUrl, got empty")
+			}
+			if recordingStatus == "" {
+				t.Errorf("Expected RecordingStatus, got empty")
+			}
+			if recordingDuration == "" {
+				t.Errorf("Expected RecordingDuration, got empty")
+			}
+
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>Recording received</Say>
+  <Hangup/>
+</Response>`), make(http.Header), nil
+		}
+		return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
+	}
+
+	e := engine.NewEngine(
+		engine.WithManualClock(),
+		engine.WithWebhookClient(mock),
+	)
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
+
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
+
+	// Give goroutines time to start
+	time.Sleep(10 * time.Millisecond)
+	err := e.AnswerCall(call.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Advance to answer
+	e.Advance(1 * time.Second)
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify call is recording
+	got, _ := e.GetCallState(call.SID)
+	if got.CurrentEndpoint != "recording" {
+		t.Errorf("Expected CurrentEndpoint=recording, got %s", got.CurrentEndpoint)
+	}
+
+	// Hangup to complete the recording
+	err = e.Hangup(call.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Advance to process recording completion
+	e.Advance(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
+
+	if !recordActionCalled {
+		t.Error("Record action was not called")
+	}
+
+	// Verify call completed after hangup
+	got, _ = e.GetCallState(call.SID)
+	if got.Status != model.CallCompleted {
+		t.Errorf("Expected completed, got %s", got.Status)
+	}
+
+	// Check for record events in timeline
+	hasRecordBeep := false
+	hasRecordCompleted := false
+	for _, event := range got.Timeline {
+		if event.Type == "record.beep" {
+			hasRecordBeep = true
+		}
+		if event.Type == "record.completed" {
+			hasRecordCompleted = true
+		}
+	}
+	if !hasRecordBeep {
+		t.Error("Expected record.beep event in timeline")
+	}
+	if !hasRecordCompleted {
+		t.Error("Expected record.completed event in timeline")
+	}
+}
+
+func TestRecordTimeout(t *testing.T) {
+	mock := httpstub.NewMockWebhookClient()
+	recordActionCalled := false
+
+	mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
+		if targetURL == "http://test/answer" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Record timeout="2" action="http://test/record-done"/>
+	<Hangup/>
+</Response>`), make(http.Header), nil
+		}
+		if targetURL == "http://test/record-done" {
+			recordActionCalled = true
+			recordingStatus := form.Get("RecordingStatus")
+			recordingDuration := form.Get("RecordingDuration")
+
+			if recordingStatus != "absent" {
+				t.Errorf("Expected RecordingStatus=absent on timeout, got %s", recordingStatus)
+			}
+			if recordingDuration != "0" {
+				t.Errorf("Expected RecordingDuration=0 on timeout, got %s", recordingDuration)
+			}
+
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Hangup/>
+</Response>`), make(http.Header), nil
+		}
+		return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
+	}
+
+	e := engine.NewEngine(
+		engine.WithManualClock(),
+		engine.WithWebhookClient(mock),
+	)
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
+
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
+
+	time.Sleep(10 * time.Millisecond)
+	if err := e.AnswerCall(call.SID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	// Advance past record timeout
+	e.Advance(5 * time.Second)
+
+	// Wait for the action callback to be called and TwiML to execute
+
+	time.Sleep(100 * time.Millisecond)
+
+	if !recordActionCalled {
+		t.Error("Record action was not called after timeout")
+	}
+
+	// Check for timeout event
+	got, _ := e.GetCallState(call.SID)
+	hasTimeout := false
+	for _, event := range got.Timeline {
+		if event.Type == "record.timeout" {
+			hasTimeout = true
+			break
+		}
+	}
+	if !hasTimeout {
+		t.Error("Expected record.timeout event in timeline")
+	}
+
+	// Verify call completed
+	if got.Status != model.CallCompleted {
+		t.Errorf("Expected call completed, got %s", got.Status)
+	}
+}
+
+func TestRecordMaxLength(t *testing.T) {
+	mock := httpstub.NewMockWebhookClient()
+	recordActionCalled := false
+
+	mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
+		if targetURL == "http://test/answer" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Record maxLength="3" action="http://test/record-done"/>
+  <Say>This will not be reached</Say>
+  <Hangup/>
+</Response>`), make(http.Header), nil
+		}
+		if targetURL == "http://test/record-done" {
+			recordActionCalled = true
+			recordingStatus := form.Get("RecordingStatus")
+			recordingDuration := form.Get("RecordingDuration")
+
+			if recordingStatus != "completed" {
+				t.Errorf("Expected RecordingStatus=completed on maxLength, got %s", recordingStatus)
+			}
+			if recordingDuration != "3" {
+				t.Errorf("Expected RecordingDuration=3 on maxLength, got %s", recordingDuration)
+			}
+
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Hangup/>
+</Response>`), make(http.Header), nil
+		}
+		return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
+	}
+
+	e := engine.NewEngine(
+		engine.WithManualClock(),
+		engine.WithWebhookClient(mock),
+	)
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234")
+
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
+
+	time.Sleep(10 * time.Millisecond)
+	if err := e.AnswerCall(call.SID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	// Advance past maxLength
+	e.Advance(5 * time.Second)
+	time.Sleep(10 * time.Millisecond)
+	if !recordActionCalled {
+		t.Error("Record action was not called after maxLength")
+	}
+
+	// Check for max_length event
+	got, _ := e.GetCallState(call.SID)
+	hasMaxLength := false
+	for _, event := range got.Timeline {
+		if event.Type == "record.max_length" {
+			hasMaxLength = true
+			break
+		}
+	}
+	if !hasMaxLength {
+		t.Error("Expected record.max_length event in timeline")
+	}
+
+	// Verify call completed
+	if got.Status != model.CallCompleted {
+		t.Errorf("Expected call completed, got %s", got.Status)
+	}
+}

@@ -84,6 +84,8 @@ func parseNode(decoder *xml.Decoder, start *xml.StartElement) (Node, error) {
 		// Hangup is self-closing, consume the end tag
 		decoder.Skip()
 		return &Hangup{}, nil
+	case "Record":
+		return parseRecord(decoder, start)
 	case "Number":
 		return parseNumber(decoder, start)
 	case "Client":
@@ -355,4 +357,38 @@ func parseConferenceDial(decoder *xml.Decoder, start *xml.StartElement) (*Confer
 	}
 
 	return conf, nil
+}
+
+func parseRecord(decoder *xml.Decoder, start *xml.StartElement) (*Record, error) {
+	record := &Record{
+		MaxLength:        3600 * time.Second, // default 1 hour
+		PlayBeep:         true,                // default true
+		Method:           "POST",
+		Transcribe:       false,
+		TimeoutInSeconds: 5 * time.Second, // default 5 seconds
+	}
+
+	for _, attr := range start.Attr {
+		switch attr.Name.Local {
+		case "maxLength":
+			if n, err := strconv.Atoi(attr.Value); err == nil {
+				record.MaxLength = time.Duration(n) * time.Second
+			}
+		case "playBeep":
+			record.PlayBeep = attr.Value == "true"
+		case "action":
+			record.Action = attr.Value
+		case "method":
+			record.Method = strings.ToUpper(attr.Value)
+		case "transcribe":
+			record.Transcribe = attr.Value == "true"
+		case "timeout":
+			if n, err := strconv.Atoi(attr.Value); err == nil {
+				record.TimeoutInSeconds = time.Duration(n) * time.Second
+			}
+		}
+	}
+
+	decoder.Skip()
+	return record, nil
 }
