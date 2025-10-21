@@ -909,6 +909,16 @@ func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string
 	if err != nil {
 		return err
 	}
+
+	// If the action callback returns no TwiML instructions, hangup the call
+	if len(resp.Children) == 0 {
+		r.addEvent("action.empty_response", map[string]any{
+			"message": "Action callback returned no TwiML instructions, hanging up call",
+			"url":     resolvedURL,
+		})
+		return r.executeHangup()
+	}
+
 	return r.executeTwiML(ctx, resp, resolvedURL)
 }
 
