@@ -175,22 +175,22 @@ func (c *Client) FetchRecording(sid string, params *twilioopenapi.FetchRecording
 
 // AnswerCall explicitly answers a ringing call
 func (c *Client) AnswerCall(sid string) error {
-	return c.engine.AnswerCall(model.SID(sid))
+	return c.engine.AnswerCall(model.SID(c.subaccountSID), model.SID(sid))
 }
 
 // SetCallBusy marks a call as busy
 func (c *Client) SetCallBusy(sid string) error {
-	return c.engine.SetCallBusy(model.SID(sid))
+	return c.engine.SetCallBusy(model.SID(c.subaccountSID), model.SID(sid))
 }
 
 // SetCallFailed marks a call as failed
 func (c *Client) SetCallFailed(sid string) error {
-	return c.engine.SetCallFailed(model.SID(sid))
+	return c.engine.SetCallFailed(model.SID(c.subaccountSID), model.SID(sid))
 }
 
 // HangupCall terminates a call
 func (c *Client) HangupCall(sid string) error {
-	return c.engine.Hangup(model.SID(sid))
+	return c.engine.Hangup(model.SID(c.subaccountSID), model.SID(sid))
 }
 
 // Snapshot returns the current state snapshot for the client's subaccount
