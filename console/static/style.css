@@ -301,3 +301,11 @@ code {
     background: #e3e8f0;
     color: #5a6987;
 }
+
+/* URL column styling to prevent table from getting too wide */
+.url-cell {
+    max-width: 250px;
+    word-break: break-all;
+    font-size: 12px;
+    line-height: 1.4;
+}

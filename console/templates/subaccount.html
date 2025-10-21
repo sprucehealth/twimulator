@@ -99,9 +99,9 @@
                         <tr>
                             <td>{{.SID}}</td>
                             <td>{{if .FriendlyName}}{{.FriendlyName}}{{else}}&mdash;{{end}}</td>
-                            <td>{{if .VoiceURL}}<a href="{{.VoiceURL}}" target="_blank">{{.VoiceURL}}</a>{{else}}&mdash;{{end}}</td>
+                            <td class="url-cell">{{if .VoiceURL}}<a href="{{.VoiceURL}}" target="_blank">{{.VoiceURL}}</a>{{else}}&mdash;{{end}}</td>
                             <td>{{if .VoiceMethod}}{{.VoiceMethod}}{{else}}&mdash;{{end}}</td>
-                            <td>{{if .StatusCallback}}{{.StatusCallback}}{{else}}&mdash;{{end}}</td>
+                            <td class="url-cell">{{if .StatusCallback}}{{.StatusCallback}}{{else}}&mdash;{{end}}</td>
                             <td>{{if .StatusCallbackMethod}}{{.StatusCallbackMethod}}{{else}}&mdash;{{end}}</td>
                             <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
                         </tr>
