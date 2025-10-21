@@ -350,6 +350,9 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 		digits = ""
 		r.addEvent("gather.timeout", map[string]any{})
 	}
+	if digits == "" {
+		return nil
+	}
 
 	r.state.mu.Lock()
 	r.call.CurrentEndpoint = ""

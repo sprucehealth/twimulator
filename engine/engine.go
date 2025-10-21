@@ -1848,7 +1848,7 @@ func (e *EngineImpl) updateCallStatusLocked(state *subAccountState, call *model.
 
 	// Trigger status callback if configured and user is interested in this event
 	if call.StatusCallback != "" && e.shouldSendStatusCallback(call, newStatus) {
-		go e.sendStatusCallback(state, call)
+		e.sendStatusCallback(state, call)
 	}
 }
 
@@ -1872,8 +1872,6 @@ func (e *EngineImpl) shouldSendStatusCallback(call *model.Call, status model.Cal
 
 // sendStatusCallback posts to the status callback URL
 func (e *EngineImpl) sendStatusCallback(state *subAccountState, call *model.Call) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
 	form := e.buildCallbackForm(state.clock, call)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
