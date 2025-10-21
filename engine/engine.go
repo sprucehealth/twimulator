@@ -1827,8 +1827,13 @@ func (e *EngineImpl) updateCallStatusLocked(state *subAccountState, call *model.
 	if call.Status == newStatus {
 		return
 	}
-
+	if call.Status.IsTerminal() {
+		return
+	}
 	oldStatus := call.Status
+	if oldStatus == model.CallRinging && newStatus == model.CallCompleted {
+		newStatus = model.CallCanceled
+	}
 	call.Status = newStatus
 
 	// Add timeline event

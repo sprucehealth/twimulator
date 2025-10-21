@@ -27,6 +27,17 @@ const (
 	CallInitiated  CallStatus = "initiated"
 )
 
+func (s CallStatus) IsTerminal() bool {
+	switch s {
+	case CallCompleted, CallCanceled, CallFailed, CallNoAnswer, CallBusy:
+		return true
+	case CallRinging, CallInProgress, CallQueued, CallAnswered, CallInitiated:
+		return false
+	default:
+		panic(fmt.Sprintf("unknown call status: %s", s))
+	}
+}
+
 // Direction represents whether a call is inbound or outbound
 type Direction string
 
