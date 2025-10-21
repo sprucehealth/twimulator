@@ -63,7 +63,7 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 
 	// Give goroutines time to start
 	time.Sleep(10 * time.Millisecond)
-	err := e.AnswerCall(c1.SID)
+	err := e.AnswerCall(c1.AccountSID, c1.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	time.Sleep(10 * time.Millisecond) // Let goroutines process
 
 	// Verify call is in-progress
-	got1, ok := e.GetCallState(c1.SID)
+	got1, ok := e.GetCallState(subAccount.SID, c1.SID)
 	if !ok {
 		t.Fatal("Call not found")
 	}
@@ -94,7 +94,7 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	c2 := mustCreateCall(t, e, params2)
 
 	time.Sleep(10 * time.Millisecond)
-	err = e.AnswerCall(c2.SID)
+	err = e.AnswerCall(c2.AccountSID, c2.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,34 +102,34 @@ func TestEnqueueAndConferenceFlow(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Both calls should be in progress
-	got1, _ = e.GetCallState(c1.SID)
+	got1, _ = e.GetCallState(subAccount.SID, c1.SID)
 	if got1.Status != model.CallInProgress {
 		t.Fatalf("Expected c1 in-progress, got %s", got1.Status)
 	}
 
-	got2, _ := e.GetCallState(c2.SID)
+	got2, _ := e.GetCallState(subAccount.SID, c2.SID)
 	if got2.Status != model.CallInProgress {
 		t.Fatalf("Expected c2 in-progress, got %s", got2.Status)
 	}
 
 	// Cleanup
-	err = e.Hangup(c1.SID)
+	err = e.Hangup(c1.AccountSID, c1.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = e.Hangup(c2.SID)
+	err = e.Hangup(c2.AccountSID, c2.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.Advance(1 * time.Second)
 
 	// Assert completed
-	got1, _ = e.GetCallState(c1.SID)
+	got1, _ = e.GetCallState(subAccount.SID, c1.SID)
 	if got1.Status != model.CallCompleted {
 		t.Fatalf("Expected c1 completed, got %s", got1.Status)
 	}
 
-	got2, _ = e.GetCallState(c2.SID)
+	got2, _ = e.GetCallState(subAccount.SID, c2.SID)
 	if got2.Status != model.CallCompleted {
 		t.Fatalf("Expected c2 completed, got %s", got2.Status)
 	}
@@ -186,7 +186,7 @@ func TestGatherWithDigits(t *testing.T) {
 
 	// Give goroutines time to start
 	time.Sleep(10 * time.Millisecond)
-	err := e.AnswerCall(call.SID)
+	err := e.AnswerCall(subAccount.SID, call.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestGatherWithDigits(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Send digits while in gather
-	err = e.SendDigits(call.SID, "1")
+	err = e.SendDigits(subAccount.SID, call.SID, "1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestGatherWithDigits(t *testing.T) {
 	}
 
 	// Verify call completed after hangup
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	if got.Status != model.CallCompleted {
 		t.Errorf("Expected completed, got %s", got.Status)
 	}
@@ -243,7 +243,7 @@ func TestGatherTimeout(t *testing.T) {
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
-	err := e.AnswerCall(call.SID)
+	err := e.AnswerCall(subAccount.SID, call.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestGatherTimeout(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Should have timed out and hung up
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	if got.Status != model.CallCompleted {
 		t.Errorf("Expected completed after timeout, got %s", got.Status)
 	}
@@ -298,13 +298,13 @@ func TestGatherRejectsInvalidChild(t *testing.T) {
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 	time.Sleep(10 * time.Millisecond)
 
-	if err := e.AnswerCall(call.SID); err != nil {
+	if err := e.AnswerCall(subAccount.SID, call.SID); err != nil {
 		t.Fatal(err)
 	}
 
 	time.Sleep(50 * time.Millisecond)
 
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	if got.Status != model.CallFailed {
 		t.Errorf("expected call to fail for invalid gather child, got %s", got.Status)
 	}
@@ -355,7 +355,7 @@ func TestRedirect(t *testing.T) {
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
-	err := e.AnswerCall(call.SID)
+	err := e.AnswerCall(subAccount.SID, call.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +366,7 @@ func TestRedirect(t *testing.T) {
 		t.Error("Redirect was not followed")
 	}
 
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	if got.Status != model.CallCompleted {
 		t.Errorf("Expected completed, got %s", got.Status)
 	}
@@ -396,12 +396,12 @@ func TestConference(t *testing.T) {
 	call2 := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+3333", "+4444", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
-	err := e.AnswerCall(call1.SID)
+	err := e.AnswerCall(subAccount.SID, call1.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
-	err = e.AnswerCall(call2.SID)
+	err = e.AnswerCall(subAccount.SID, call2.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +423,7 @@ func TestConference(t *testing.T) {
 	}
 
 	// Hangup one call
-	e.Hangup(call1.SID)
+	e.Hangup(subAccount.SID, call1.SID)
 	e.Advance(1 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 
@@ -433,7 +433,7 @@ func TestConference(t *testing.T) {
 	}
 
 	// Hangup last call
-	e.Hangup(call2.SID)
+	e.Hangup(subAccount.SID, call2.SID)
 	e.Advance(1 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 
@@ -478,7 +478,7 @@ func TestStatusCallbacks(t *testing.T) {
 	}
 
 	// Verify timeline has status callback events
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	hasStatusCallback := false
 	for _, event := range got.Timeline {
 		if event.Type == "webhook.status_callback" {
@@ -518,7 +518,7 @@ func TestCallNoAnswer(t *testing.T) {
 	// In our current implementation, calls answer immediately
 	// To properly test no-answer, we'd need to modify the runner
 	// For now, verify call reached some end state
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	if got.Status == model.CallQueued || got.Status == model.CallRinging {
 		t.Errorf("Call should have progressed past queued/ringing")
 	}
@@ -661,7 +661,8 @@ func mustCreateCall(t *testing.T, e *engine.EngineImpl, params *twilioopenapi.Cr
 		t.Fatal("create call did not return SID")
 	}
 	sid := model.SID(*apiCall.Sid)
-	call, ok := e.GetCallState(sid)
+	accountSID := model.SID(*params.PathAccountSid)
+	call, ok := e.GetCallState(accountSID, sid)
 	if !ok {
 		t.Fatalf("call %s not found after creation", sid)
 	}
@@ -703,7 +704,8 @@ func TestUpdateCall(t *testing.T) {
 	updateParams := (&twilioopenapi.UpdateCallParams{}).
 		SetUrl("http://test/new-answer").
 		SetStatusCallback("http://test/status").
-		SetStatus("completed")
+		SetStatus("completed").
+		SetPathAccountSid(string(subAccount.SID))
 
 	resp, err := e.UpdateCall(string(call.SID), updateParams)
 	if err != nil {
@@ -713,7 +715,7 @@ func TestUpdateCall(t *testing.T) {
 		t.Fatal("expected response SID")
 	}
 
-	got, ok := e.GetCallState(call.SID)
+	got, ok := e.GetCallState(subAccount.SID, call.SID)
 	if !ok {
 		t.Fatalf("call %s not found after update", call.SID)
 	}
@@ -780,7 +782,9 @@ func TestListIncomingPhoneNumber(t *testing.T) {
 	}
 
 	numberSID := *list[0].Sid
-	if err := e.DeleteIncomingPhoneNumber(numberSID, nil); err != nil {
+	delParams := (&twilioopenapi.DeleteIncomingPhoneNumberParams{}).
+		SetPathAccountSid(string(subAccount.SID))
+	if err := e.DeleteIncomingPhoneNumber(numberSID, delParams); err != nil {
 		t.Fatalf("delete number failed: %v", err)
 	}
 
@@ -875,7 +879,7 @@ func TestPlayFetchesURL(t *testing.T) {
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
-	err := e.AnswerCall(call.SID)
+	err := e.AnswerCall(subAccount.SID, call.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -887,7 +891,7 @@ func TestPlayFetchesURL(t *testing.T) {
 	}
 
 	// Verify call completed after play and hangup
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	if got.Status != model.CallCompleted {
 		t.Errorf("Expected completed, got %s", got.Status)
 	}
@@ -935,7 +939,7 @@ func TestPlayInvalidURL(t *testing.T) {
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
-	err := e.AnswerCall(call.SID)
+	err := e.AnswerCall(subAccount.SID, call.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -943,7 +947,7 @@ func TestPlayInvalidURL(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Call should fail due to invalid play URL
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	if got.Status != model.CallFailed {
 		t.Errorf("Expected failed status due to invalid play URL, got %s", got.Status)
 	}
@@ -1008,7 +1012,8 @@ func TestUpdateIncomingPhoneNumber(t *testing.T) {
 
 	// Update to app2
 	updateParams := (&twilioopenapi.UpdateIncomingPhoneNumberParams{}).
-		SetVoiceApplicationSid(*app2.Sid)
+		SetVoiceApplicationSid(*app2.Sid).
+		SetPathAccountSid(string(subAccount.SID))
 	updated, err := e.UpdateIncomingPhoneNumber(*number.Sid, updateParams)
 	if err != nil {
 		t.Fatalf("update incoming phone number failed: %v", err)
@@ -1042,7 +1047,8 @@ func TestUpdateIncomingPhoneNumber(t *testing.T) {
 
 	// Clear the application association
 	clearParams := (&twilioopenapi.UpdateIncomingPhoneNumberParams{}).
-		SetVoiceApplicationSid("")
+		SetVoiceApplicationSid("").
+		SetPathAccountSid(string(subAccount.SID))
 	cleared, err := e.UpdateIncomingPhoneNumber(*number.Sid, clearParams)
 	if err != nil {
 		t.Fatalf("clear voice application failed: %v", err)
@@ -1151,7 +1157,10 @@ func TestSIDLength(t *testing.T) {
 	mustProvisionNumbers(t, e2, subAccount2.SID, "+1111")
 	confCall := mustCreateCall(t, e2, newCreateCallParams(subAccount2.SID, "+1111", "+2222", "http://test/answer"))
 	time.Sleep(10 * time.Millisecond)
-	e2.AnswerCall(confCall.SID)
+	err = e2.AnswerCall(subAccount2.SID, confCall.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e2.Advance(2 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 
@@ -1227,7 +1236,7 @@ func TestRecordWithAction(t *testing.T) {
 
 	// Give goroutines time to start
 	time.Sleep(10 * time.Millisecond)
-	err := e.AnswerCall(call.SID)
+	err := e.AnswerCall(subAccount.SID, call.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1236,13 +1245,13 @@ func TestRecordWithAction(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify call is recording
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	if got.CurrentEndpoint != "recording" {
 		t.Errorf("Expected CurrentEndpoint=recording, got %s", got.CurrentEndpoint)
 	}
 
 	// Hangup to complete the recording
-	err = e.Hangup(call.SID)
+	err = e.Hangup(subAccount.SID, call.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1256,7 +1265,7 @@ func TestRecordWithAction(t *testing.T) {
 	}
 
 	// Verify call completed after hangup
-	got, _ = e.GetCallState(call.SID)
+	got, _ = e.GetCallState(subAccount.SID, call.SID)
 	if got.Status != model.CallCompleted {
 		t.Errorf("Expected completed, got %s", got.Status)
 	}
@@ -1306,21 +1315,21 @@ func TestRecordStopsSubsequentVerbs(t *testing.T) {
 	call := mustCreateCall(t, e, params)
 
 	time.Sleep(10 * time.Millisecond)
-	if err := e.AnswerCall(call.SID); err != nil {
+	if err := e.AnswerCall(subAccount.SID, call.SID); err != nil {
 		t.Fatal(err)
 	}
 
 	e.Advance(1 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 
-	if err := e.Hangup(call.SID); err != nil {
+	if err := e.Hangup(subAccount.SID, call.SID); err != nil {
 		t.Fatal(err)
 	}
 
 	e.Advance(10 * time.Second)
 	time.Sleep(50 * time.Millisecond)
 
-	state, ok := e.GetCallState(call.SID)
+	state, ok := e.GetCallState(subAccount.SID, call.SID)
 	if !ok {
 		t.Fatal("call state not found")
 	}
@@ -1376,7 +1385,7 @@ func TestRecordTimeout(t *testing.T) {
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
-	if err := e.AnswerCall(call.SID); err != nil {
+	if err := e.AnswerCall(subAccount.SID, call.SID); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
@@ -1393,7 +1402,7 @@ func TestRecordTimeout(t *testing.T) {
 	}
 
 	// Check for timeout event
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	hasTimeout := false
 	for _, event := range got.Timeline {
 		if event.Type == "record.timeout" {
@@ -1456,7 +1465,7 @@ func TestRecordMaxLength(t *testing.T) {
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
-	if err := e.AnswerCall(call.SID); err != nil {
+	if err := e.AnswerCall(subAccount.SID, call.SID); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
@@ -1468,7 +1477,7 @@ func TestRecordMaxLength(t *testing.T) {
 	}
 
 	// Check for max_length event
-	got, _ := e.GetCallState(call.SID)
+	got, _ := e.GetCallState(subAccount.SID, call.SID)
 	hasMaxLength := false
 	for _, event := range got.Timeline {
 		if event.Type == "record.max_length" {

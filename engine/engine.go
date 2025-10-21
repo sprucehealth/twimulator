@@ -16,6 +16,8 @@ import (
 	"twimulator/model"
 )
 
+var _ Engine = &EngineImpl{}
+
 // Engine is the main interface for the Twilio Voice simulator
 type Engine interface {
 	// Subaccount management
@@ -32,11 +34,11 @@ type Engine interface {
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
 	CreateIncomingCall(accountSID model.SID, from string, to string) (*twilioopenapi.ApiV2010Call, error)
 	UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error)
-	AnswerCall(callSID model.SID) error
-	SetCallBusy(callSID model.SID) error
-	SetCallFailed(callSID model.SID) error
-	Hangup(callSID model.SID) error
-	SendDigits(callSID model.SID, digits string) error
+	AnswerCall(subaccountSID model.SID, callSID model.SID) error
+	SetCallBusy(subaccountSID model.SID, callSID model.SID) error
+	SetCallFailed(subaccountSID model.SID, callSID model.SID) error
+	Hangup(subaccountSID model.SID, callSID model.SID) error
+	SendDigits(subaccountSID model.SID, callSID model.SID, digits string) error
 
 	// Introspection
 	FetchCall(sid string, params *twilioopenapi.FetchCallParams) (*twilioopenapi.ApiV2010Call, error)
@@ -52,7 +54,7 @@ type Engine interface {
 	Snapshot(accountSID model.SID) (*StateSnapshot, error)
 	SnapshotAll() *StateSnapshot
 
-	SetClockForAccount(accountSID model.SID, clock Clock)
+	SetClockForAccount(accountSID model.SID, clock Clock) error
 	AdvanceForAccount(accountSID model.SID, d time.Duration) error
 	// Time control
 	SetAutoTime(enabled bool)
@@ -79,32 +81,38 @@ type StateSnapshot struct {
 	Timestamp   time.Time                       `json:"timestamp"`
 }
 
-// EngineImpl is the concrete implementation of Engine
-type EngineImpl struct {
-	mu               sync.RWMutex
-	defaultClock     Clock
-	subAccountClocks map[model.SID]Clock // Optional per-subaccount clocks
-	webhook          httpstub.WebhookClient
-	apiVersion       string
+// subAccountState holds all state for a single subaccount with its own lock
+type subAccountState struct {
+	mu sync.RWMutex
 
-	// Subaccount management
-	subAccounts     map[model.SID]*model.SubAccount
-	incomingNumbers map[model.SID]map[string]*incomingNumber
-	applications    map[model.SID]map[model.SID]*applicationRecord
+	account *model.SubAccount
+	clock   Clock
 
-	// Resources are scoped by subaccount SID
-	calls       map[model.SID]*model.Call                  // All calls across all subaccounts
-	queues      map[model.SID]map[string]*model.Queue      // subAccountSID -> queue name -> Queue
-	conferences map[model.SID]map[string]*model.Conference // subAccountSID -> conf name -> Conference
+	// Resources scoped to this subaccount
+	incomingNumbers map[string]*incomingNumber
+	applications    map[model.SID]*applicationRecord
+	calls           map[model.SID]*model.Call
+	queues          map[string]*model.Queue
+	conferences     map[string]*model.Conference
+	runners         map[model.SID]*CallRunner
 
 	// Participant states scoped by (conferenceSID, callSID)
-	participantStates map[model.SID]map[model.SID]*model.ParticipantState // conferenceSID -> callSID -> ParticipantState
+	participantStates map[model.SID]map[model.SID]*model.ParticipantState
+}
 
-	// Call runners
-	runners map[model.SID]*CallRunner
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+// EngineImpl is the concrete implementation of Engine
+type EngineImpl struct {
+	// Global mutex ONLY for subaccount map mutations
+	subAccountsMu sync.RWMutex
+	subAccounts   map[model.SID]*subAccountState
+
+	// Immutable or globally-shared state (no lock needed after init)
+	defaultClock Clock
+	webhook      httpstub.WebhookClient
+	apiVersion   string
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
 // EngineOption configures the engine
@@ -167,20 +175,12 @@ func NewEngine(opts ...EngineOption) *EngineImpl {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	e := &EngineImpl{
-		defaultClock:      NewManualClock(time.Time{}), // default to manual
-		subAccountClocks:  make(map[model.SID]Clock),
-		webhook:           httpstub.NewDefaultWebhookClient(10 * time.Second),
-		apiVersion:        "2010-04-01",
-		subAccounts:       make(map[model.SID]*model.SubAccount),
-		incomingNumbers:   make(map[model.SID]map[string]*incomingNumber),
-		applications:      make(map[model.SID]map[model.SID]*applicationRecord),
-		calls:             make(map[model.SID]*model.Call),
-		queues:            make(map[model.SID]map[string]*model.Queue),
-		conferences:       make(map[model.SID]map[string]*model.Conference),
-		participantStates: make(map[model.SID]map[model.SID]*model.ParticipantState),
-		runners:           make(map[model.SID]*CallRunner),
-		ctx:               ctx,
-		cancel:            cancel,
+		defaultClock: NewManualClock(time.Time{}), // default to manual
+		webhook:      httpstub.NewDefaultWebhookClient(10 * time.Second),
+		apiVersion:   "2010-04-01",
+		subAccounts:  make(map[model.SID]*subAccountState),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 
 	for _, opt := range opts {
@@ -192,16 +192,13 @@ func NewEngine(opts ...EngineOption) *EngineImpl {
 
 // CreateAccount creates a new simulated Twilio subaccount
 func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*twilioopenapi.ApiV2010Account, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	friendlyName := ""
 	if params != nil && params.FriendlyName != nil {
 		friendlyName = *params.FriendlyName
 	}
 
 	sid := model.NewSubAccountSID()
-	now := e.clockNowLocked(sid)
+	now := e.defaultClock.Now()
 	authToken := model.NewAuthToken()
 
 	subAccount := &model.SubAccount{
@@ -212,13 +209,23 @@ func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*
 		AuthToken:    authToken,
 	}
 
-	e.subAccounts[subAccount.SID] = subAccount
+	// Create new subaccount state
+	state := &subAccountState{
+		clock:             e.defaultClock,
+		account:           subAccount,
+		incomingNumbers:   make(map[string]*incomingNumber),
+		applications:      make(map[model.SID]*applicationRecord),
+		calls:             make(map[model.SID]*model.Call),
+		queues:            make(map[string]*model.Queue),
+		conferences:       make(map[string]*model.Conference),
+		runners:           make(map[model.SID]*CallRunner),
+		participantStates: make(map[model.SID]map[model.SID]*model.ParticipantState),
+	}
 
-	// Initialize resource maps for this subaccount
-	e.queues[subAccount.SID] = make(map[string]*model.Queue)
-	e.conferences[subAccount.SID] = make(map[string]*model.Conference)
-	e.incomingNumbers[subAccount.SID] = make(map[string]*incomingNumber)
-	e.applications[subAccount.SID] = make(map[model.SID]*applicationRecord)
+	// Only lock when adding to subaccounts map
+	e.subAccountsMu.Lock()
+	e.subAccounts[sid] = state
+	e.subAccountsMu.Unlock()
 
 	sidStr := string(sid)
 	authTokenCopy := authToken
@@ -237,20 +244,28 @@ func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*
 
 // ListAccount returns Twilio-style account representations filtered by optional friendly name
 func (e *EngineImpl) ListAccount(params *twilioopenapi.ListAccountParams) ([]twilioopenapi.ApiV2010Account, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
 	var friendly string
 	if params != nil && params.FriendlyName != nil {
 		friendly = *params.FriendlyName
 	}
 
+	e.subAccountsMu.RLock()
+	states := make([]*subAccountState, 0, len(e.subAccounts))
+	for _, state := range e.subAccounts {
+		states = append(states, state)
+	}
+	e.subAccountsMu.RUnlock()
+
 	matches := make([]*model.SubAccount, 0)
-	for _, sa := range e.subAccounts {
+	for _, state := range states {
+		state.mu.RLock()
+		sa := state.account
 		if friendly != "" && sa.FriendlyName != friendly {
+			state.mu.RUnlock()
 			continue
 		}
 		matches = append(matches, sa)
+		state.mu.RUnlock()
 	}
 
 	sort.SliceStable(matches, func(i, j int) bool {
@@ -336,19 +351,24 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 
 	accountSIDModel := model.SID(accountSID)
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSIDModel]
+	e.subAccountsMu.RUnlock()
 
-	if _, exists := e.subAccounts[accountSIDModel]; !exists {
+	if !exists {
 		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
-	numbers := e.incomingNumbers[accountSIDModel]
-	if numbers == nil || numbers[from] == nil {
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if state.incomingNumbers[from] == nil {
 		return nil, fmt.Errorf("from number %s not provisioned for account %s", from, accountSID)
 	}
 
-	now := e.clockNowLocked(accountSIDModel)
+	now := state.clock.Now()
 	call := &model.Call{
 		SID:                  model.NewCallSID(),
 		AccountSID:           accountSIDModel,
@@ -384,10 +404,10 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		},
 	))
 
-	e.calls[call.SID] = call
+	state.calls[call.SID] = call
 
-	runner := NewCallRunner(call, e.getClockForAccountLocked(accountSIDModel), e, timeout)
-	e.runners[call.SID] = runner
+	runner := NewCallRunner(call, state, e, timeout)
+	state.runners[call.SID] = runner
 
 	e.wg.Add(1)
 	go func() {
@@ -400,21 +420,24 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 
 // CreateIncomingCall simulates an incoming call to a number with an application
 func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to string) (*twilioopenapi.ApiV2010Call, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
-	// Validate subaccount exists
-	if _, exists := e.subAccounts[accountSID]; !exists {
+	if !exists {
 		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
 	// Find the incoming number
-	numbers := e.incomingNumbers[accountSID]
-	if numbers == nil || numbers[to] == nil {
+	incomingNum := state.incomingNumbers[to]
+	if incomingNum == nil {
 		return nil, fmt.Errorf("to number %s not provisioned for account %s", to, accountSID)
 	}
-
-	incomingNum := numbers[to]
 
 	// Validate the number has an application configured
 	if incomingNum.VoiceApplication == nil {
@@ -422,12 +445,7 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 	}
 
 	// Get the application configuration
-	apps := e.applications[accountSID]
-	if apps == nil {
-		return nil, fmt.Errorf("no applications found for account %s", accountSID)
-	}
-
-	app := apps[*incomingNum.VoiceApplication]
+	app := state.applications[*incomingNum.VoiceApplication]
 	if app == nil {
 		return nil, fmt.Errorf("application %s not found for account %s", *incomingNum.VoiceApplication, accountSID)
 	}
@@ -438,7 +456,7 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 	}
 
 	// Create the call with application's configuration
-	now := e.clockNowLocked(accountSID)
+	now := state.clock.Now()
 	call := &model.Call{
 		SID:                  model.NewCallSID(),
 		AccountSID:           accountSID,
@@ -466,11 +484,11 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 		},
 	))
 
-	e.calls[call.SID] = call
+	state.calls[call.SID] = call
 
 	timeout := 30 * time.Second
-	runner := NewCallRunner(call, e.getClockForAccountLocked(accountSID), e, timeout)
-	e.runners[call.SID] = runner
+	runner := NewCallRunner(call, state, e, timeout)
+	state.runners[call.SID] = runner
 
 	e.wg.Add(1)
 	go func() {
@@ -505,20 +523,20 @@ func (e *EngineImpl) CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncom
 
 	accountSIDModel := model.SID(accountSID)
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSIDModel]
+	e.subAccountsMu.RUnlock()
 
-	subAccount, exists := e.subAccounts[accountSIDModel]
 	if !exists {
 		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
-	numbers := e.incomingNumbers[accountSIDModel]
-	if numbers == nil {
-		numbers = make(map[string]*incomingNumber)
-		e.incomingNumbers[accountSIDModel] = numbers
-	}
-	if _, exists := numbers[phone]; exists {
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if _, exists := state.incomingNumbers[phone]; exists {
 		return nil, fmt.Errorf("phone number %s already exists", phone)
 	}
 
@@ -526,14 +544,14 @@ func (e *EngineImpl) CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncom
 	appValue := ""
 	if params.VoiceApplicationSid != nil && *params.VoiceApplicationSid != "" {
 		appSID := model.SID(*params.VoiceApplicationSid)
-		if apps := e.applications[accountSIDModel]; apps == nil || apps[appSID] == nil {
+		if state.applications[appSID] == nil {
 			return nil, fmt.Errorf("application %s not found for account %s", appSID, accountSID)
 		}
 		voiceAppSID = &appSID
 		appValue = string(appSID)
 	}
 
-	now := e.clockNowLocked(accountSIDModel)
+	now := state.clock.Now()
 	sid := model.NewPhoneNumberSID()
 	record := &incomingNumber{
 		SID:              sid,
@@ -541,7 +559,7 @@ func (e *EngineImpl) CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncom
 		VoiceApplication: voiceAppSID,
 		CreatedAt:        now,
 	}
-	numbers[phone] = record
+	state.incomingNumbers[phone] = record
 
 	var appStrPtr *string
 	if voiceAppSID != nil {
@@ -549,7 +567,7 @@ func (e *EngineImpl) CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncom
 		appStrPtr = &appCopy
 	}
 
-	subAccount.IncomingNumbers = append(subAccount.IncomingNumbers, model.IncomingNumber{
+	state.account.IncomingNumbers = append(state.account.IncomingNumbers, model.IncomingNumber{
 		SID:                 string(sid),
 		PhoneNumber:         phone,
 		VoiceApplicationSID: appStrPtr,
@@ -584,20 +602,21 @@ func (e *EngineImpl) ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingP
 		filterPhone = *params.PhoneNumber
 	}
 
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
-	if _, exists := e.subAccounts[accountSID]; !exists {
+	if !exists {
 		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
-	numbers := e.incomingNumbers[accountSID]
-	if numbers == nil {
-		return []twilioopenapi.ApiV2010IncomingPhoneNumber{}, nil
-	}
+	// Lock only this subaccount
+	state.mu.RLock()
+	defer state.mu.RUnlock()
 
 	result := make([]twilioopenapi.ApiV2010IncomingPhoneNumber, 0)
-	for phone, rec := range numbers {
+	for phone, rec := range state.incomingNumbers {
 		if filterPhone != "" && phone != filterPhone {
 			continue
 		}
@@ -621,34 +640,38 @@ func (e *EngineImpl) ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingP
 
 // UpdateIncomingPhoneNumber updates a provisioned phone number
 func (e *EngineImpl) UpdateIncomingPhoneNumber(sid string, params *twilioopenapi.UpdateIncomingPhoneNumberParams) (*twilioopenapi.ApiV2010IncomingPhoneNumber, error) {
-	if params == nil {
-		return nil, fmt.Errorf("params is required")
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
 	}
+	accountSID := model.SID(*params.PathAccountSid)
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	if !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
 
 	// Find the incoming number by SID across all subaccounts
 	var foundNumber *incomingNumber
 	var foundPhone string
-	var foundAccountSID model.SID
-	for accountSID, numbers := range e.incomingNumbers {
-		for phone, rec := range numbers {
-			if string(rec.SID) == sid {
-				foundNumber = rec
-				foundPhone = phone
-				foundAccountSID = accountSID
-				break
-			}
-		}
-		if foundNumber != nil {
-			break
+	state.mu.RLock()
+	for phone, rec := range state.incomingNumbers {
+		if string(rec.SID) == sid {
+			foundNumber = rec
+			foundPhone = phone
 		}
 	}
+	state.mu.RUnlock()
 
 	if foundNumber == nil {
 		return nil, fmt.Errorf("incoming phone number %s not found", sid)
 	}
+
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
 	// Update VoiceApplicationSid if provided
 	if params.VoiceApplicationSid != nil {
@@ -659,24 +682,22 @@ func (e *EngineImpl) UpdateIncomingPhoneNumber(sid string, params *twilioopenapi
 		} else {
 			// Validate the application exists for this account
 			appSID := model.SID(appSIDStr)
-			if apps := e.applications[foundAccountSID]; apps == nil || apps[appSID] == nil {
-				return nil, fmt.Errorf("application %s not found for account %s", appSID, foundAccountSID)
+			if state.applications[appSID] == nil {
+				return nil, fmt.Errorf("application %s not found for account %s", appSID, state.account.SID)
 			}
 			foundNumber.VoiceApplication = &appSID
 		}
 
 		// Update the SubAccount's IncomingNumbers list
-		if subAccount := e.subAccounts[foundAccountSID]; subAccount != nil {
-			for i := range subAccount.IncomingNumbers {
-				if subAccount.IncomingNumbers[i].SID == string(foundNumber.SID) {
-					if foundNumber.VoiceApplication != nil {
-						appCopy := string(*foundNumber.VoiceApplication)
-						subAccount.IncomingNumbers[i].VoiceApplicationSID = &appCopy
-					} else {
-						subAccount.IncomingNumbers[i].VoiceApplicationSID = nil
-					}
-					break
+		for i := range state.account.IncomingNumbers {
+			if state.account.IncomingNumbers[i].SID == string(foundNumber.SID) {
+				if foundNumber.VoiceApplication != nil {
+					appCopy := string(*foundNumber.VoiceApplication)
+					state.account.IncomingNumbers[i].VoiceApplicationSID = &appCopy
+				} else {
+					state.account.IncomingNumbers[i].VoiceApplicationSID = nil
 				}
+				break
 			}
 		}
 	}
@@ -699,26 +720,34 @@ func (e *EngineImpl) UpdateIncomingPhoneNumber(sid string, params *twilioopenapi
 }
 
 // DeleteIncomingPhoneNumber removes a provisioned number
-func (e *EngineImpl) DeleteIncomingPhoneNumber(sid string, _ *twilioopenapi.DeleteIncomingPhoneNumberParams) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *EngineImpl) DeleteIncomingPhoneNumber(sid string, params *twilioopenapi.DeleteIncomingPhoneNumberParams) error {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return fmt.Errorf("PathAccountSid is required")
+	}
+	accountSID := model.SID(*params.PathAccountSid)
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
-	for accountSID, numbers := range e.incomingNumbers {
-		for phone, rec := range numbers {
-			if string(rec.SID) == sid {
-				delete(numbers, phone)
-				sa := e.subAccounts[accountSID]
-				if sa != nil {
-					filtered := make([]model.IncomingNumber, 0, len(sa.IncomingNumbers))
-					for _, n := range sa.IncomingNumbers {
-						if n.PhoneNumber != phone {
-							filtered = append(filtered, n)
-						}
-					}
-					sa.IncomingNumbers = filtered
+	if !exists {
+		return fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	// Find and delete the incoming number
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for phone, rec := range state.incomingNumbers {
+		if string(rec.SID) == sid {
+			delete(state.incomingNumbers, phone)
+			filtered := make([]model.IncomingNumber, 0, len(state.account.IncomingNumbers))
+			for _, n := range state.account.IncomingNumbers {
+				if n.PhoneNumber != phone {
+					filtered = append(filtered, n)
 				}
-				return nil
 			}
+			state.account.IncomingNumbers = filtered
+			return nil
 		}
 	}
 	return fmt.Errorf("incoming phone number %s not found", sid)
@@ -752,21 +781,20 @@ func (e *EngineImpl) CreateApplication(params *twilioopenapi.CreateApplicationPa
 		statusCallbackMethod = *params.StatusCallbackMethod
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
-	subAccount, exists := e.subAccounts[accountSID]
 	if !exists {
 		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
-	recMap := e.applications[accountSID]
-	if recMap == nil {
-		recMap = make(map[model.SID]*applicationRecord)
-		e.applications[accountSID] = recMap
-	}
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
-	now := e.clockNowLocked(accountSID)
+	now := state.clock.Now()
 	sid := model.NewApplicationSID()
 	rec := &applicationRecord{
 		SID:                  sid,
@@ -777,8 +805,8 @@ func (e *EngineImpl) CreateApplication(params *twilioopenapi.CreateApplicationPa
 		StatusCallback:       statusCallback,
 		CreatedAt:            now,
 	}
-	recMap[sid] = rec
-	subAccount.Applications = append(subAccount.Applications, model.Application{
+	state.applications[sid] = rec
+	state.account.Applications = append(state.account.Applications, model.Application{
 		SID:                  string(sid),
 		FriendlyName:         friendly,
 		VoiceMethod:          voiceMethod,
@@ -813,22 +841,26 @@ func (e *EngineImpl) CreateQueue(params *twilioopenapi.CreateQueueParams) (*twil
 		return nil, fmt.Errorf("FriendlyName is required")
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
-	if _, exists := e.subAccounts[accountSID]; !exists {
+	if !exists {
 		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
 	// Check if queue with this name already exists
-	if queues, exists := e.queues[accountSID]; exists {
-		if _, found := queues[friendlyName]; found {
-			return nil, fmt.Errorf("queue %s already exists for account %s", friendlyName, accountSID)
-		}
+	if _, found := state.queues[friendlyName]; found {
+		return nil, fmt.Errorf("queue %s already exists for account %s", friendlyName, accountSID)
 	}
 
 	// Create the queue
-	queue := e.getOrCreateQueue(accountSID, friendlyName)
+	queue := e.getOrCreateQueueLocked(state, accountSID, friendlyName)
 
 	sidStr := string(queue.SID)
 	accountSIDStr := string(accountSID)
@@ -841,35 +873,53 @@ func (e *EngineImpl) CreateQueue(params *twilioopenapi.CreateQueueParams) (*twil
 
 // UpdateCall applies updates to an existing call (status, callback URL, etc.)
 func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error) {
-	e.mu.Lock()
-	call, exists := e.calls[model.SID(sid)]
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	accountSID := model.SID(*params.PathAccountSid)
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
 	if !exists {
-		e.mu.Unlock()
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	callSID := model.SID(sid)
+
+	state.mu.RLock()
+	call, exists := state.calls[callSID]
+	state.mu.RUnlock()
+	if !exists {
 		return nil, fmt.Errorf("call %s not found", sid)
 	}
-	runner := e.runners[call.SID]
-	now := e.clockNowLocked(call.AccountSID)
+
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	runner := state.runners[call.SID]
+	now := state.clock.Now()
 	updatedFields := make(map[string]any)
 	needHangup := false
 
-	if params != nil {
-		if params.Url != nil {
-			call.Url = *params.Url
-			updatedFields["url"] = *params.Url
-		}
-		if params.StatusCallback != nil {
-			call.StatusCallback = *params.StatusCallback
-			updatedFields["status_callback"] = *params.StatusCallback
-		}
-		if params.Status != nil {
-			status := strings.ToLower(*params.Status)
-			switch status {
-			case "completed", "canceled", "cancelled":
-				if call.Status != model.CallCompleted {
-					needHangup = true
-				}
-				updatedFields["status"] = status
+	if params.Url != nil {
+		call.Url = *params.Url
+		updatedFields["url"] = *params.Url
+	}
+	if params.StatusCallback != nil {
+		call.StatusCallback = *params.StatusCallback
+		updatedFields["status_callback"] = *params.StatusCallback
+	}
+	if params.Status != nil {
+		status := strings.ToLower(*params.Status)
+		switch status {
+		case "completed", "canceled", "cancelled":
+			if call.Status != model.CallCompleted {
+				needHangup = true
 			}
+			updatedFields["status"] = status
 		}
 	}
 
@@ -878,13 +928,12 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 	}
 
 	if needHangup {
-		e.updateCallStatus(call, model.CallCompleted)
+		e.updateCallStatusLocked(state, call, model.CallCompleted)
 		end := now
 		call.EndedAt = &end
 	}
 
 	resp := buildAPICallResponse(call, e.apiVersion)
-	e.mu.Unlock()
 
 	if needHangup && runner != nil {
 		runner.Hangup()
@@ -894,19 +943,26 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 }
 
 // AnswerCall explicitly answers a ringing call
-func (e *EngineImpl) AnswerCall(callSID model.SID) error {
-	e.mu.RLock()
-	call, exists := e.calls[callSID]
+func (e *EngineImpl) AnswerCall(subaccountSID, callSID model.SID) error {
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[subaccountSID]
+	e.subAccountsMu.RUnlock()
+
 	if !exists {
-		e.mu.RUnlock()
+		return fmt.Errorf("subaccount %s not found", subaccountSID)
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	call, exists := state.calls[callSID]
+	if !exists {
 		return fmt.Errorf("call %s not found", callSID)
 	}
 	if call.Status != model.CallRinging {
-		e.mu.RUnlock()
 		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
 	}
-	runner := e.runners[callSID]
-	e.mu.RUnlock()
+	runner := state.runners[callSID]
 
 	if runner != nil {
 		select {
@@ -919,19 +975,26 @@ func (e *EngineImpl) AnswerCall(callSID model.SID) error {
 }
 
 // SetCallBusy marks a call as busy
-func (e *EngineImpl) SetCallBusy(callSID model.SID) error {
-	e.mu.RLock()
-	call, exists := e.calls[callSID]
+func (e *EngineImpl) SetCallBusy(subaccountSID, callSID model.SID) error {
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[subaccountSID]
+	e.subAccountsMu.RUnlock()
+
 	if !exists {
-		e.mu.RUnlock()
+		return fmt.Errorf("subaccount %s not found", subaccountSID)
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	call, exists := state.calls[callSID]
+	if !exists {
 		return fmt.Errorf("call %s not found", callSID)
 	}
 	if call.Status != model.CallRinging {
-		e.mu.RUnlock()
 		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
 	}
-	runner := e.runners[callSID]
-	e.mu.RUnlock()
+	runner := state.runners[callSID]
 
 	if runner != nil {
 		select {
@@ -944,19 +1007,26 @@ func (e *EngineImpl) SetCallBusy(callSID model.SID) error {
 }
 
 // SetCallFailed marks a call as failed
-func (e *EngineImpl) SetCallFailed(callSID model.SID) error {
-	e.mu.RLock()
-	call, exists := e.calls[callSID]
+func (e *EngineImpl) SetCallFailed(subaccountSID, callSID model.SID) error {
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[subaccountSID]
+	e.subAccountsMu.RUnlock()
+
 	if !exists {
-		e.mu.RUnlock()
+		return fmt.Errorf("subaccount %s not found", subaccountSID)
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	call, exists := state.calls[callSID]
+	if !exists {
 		return fmt.Errorf("call %s not found", callSID)
 	}
 	if call.Status != model.CallRinging {
-		e.mu.RUnlock()
 		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
 	}
-	runner := e.runners[callSID]
-	e.mu.RUnlock()
+	runner := state.runners[callSID]
 
 	if runner != nil {
 		select {
@@ -969,39 +1039,57 @@ func (e *EngineImpl) SetCallFailed(callSID model.SID) error {
 }
 
 // Hangup terminates a call
-func (e *EngineImpl) Hangup(callSID model.SID) error {
-	e.mu.Lock()
-	call, exists := e.calls[callSID]
+func (e *EngineImpl) Hangup(subaccountSID, callSID model.SID) error {
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[subaccountSID]
+	e.subAccountsMu.RUnlock()
+
 	if !exists {
-		e.mu.Unlock()
+		return fmt.Errorf("subaccount %s not found", subaccountSID)
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	call, exists := state.calls[callSID]
+	if !exists {
 		return fmt.Errorf("call %s not found", callSID)
 	}
-	runner := e.runners[callSID]
-	e.mu.Unlock()
+	runner := state.runners[callSID]
 
 	if runner != nil {
 		runner.Hangup()
 	}
 
 	// Update call status
-	e.mu.Lock()
 	if call.Status != model.CallCompleted {
-		e.updateCallStatus(call, model.CallCompleted)
-		now := e.clockNowLocked(call.AccountSID)
+		e.updateCallStatusLocked(state, call, model.CallCompleted)
+		now := state.clock.Now()
 		call.EndedAt = &now
 	}
-	e.mu.Unlock()
 
 	return nil
 }
 
 // SendDigits sends DTMF digits to a call (for Gather)
-func (e *EngineImpl) SendDigits(callSID model.SID, digits string) error {
-	e.mu.RLock()
-	runner, exists := e.runners[callSID]
-	e.mu.RUnlock()
+func (e *EngineImpl) SendDigits(subaccountSID, callSID model.SID, digits string) error {
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[subaccountSID]
+	e.subAccountsMu.RUnlock()
 
 	if !exists {
+		return fmt.Errorf("subaccount %s not found", subaccountSID)
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	_, exists = state.calls[callSID]
+	if !exists {
+		return fmt.Errorf("call %s not found", callSID)
+	}
+	runner := state.runners[callSID]
+	if runner == nil {
 		return fmt.Errorf("call %s not found", callSID)
 	}
 
@@ -1010,33 +1098,58 @@ func (e *EngineImpl) SendDigits(callSID model.SID, digits string) error {
 }
 
 // FetchCall returns a Twilio-style call response
-func (e *EngineImpl) FetchCall(sid string, _ *twilioopenapi.FetchCallParams) (*twilioopenapi.ApiV2010Call, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	call, exists := e.calls[model.SID(sid)]
+func (e *EngineImpl) FetchCall(sid string, params *twilioopenapi.FetchCallParams) (*twilioopenapi.ApiV2010Call, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	accountSID := model.SID(*params.PathAccountSid)
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	callSID := model.SID(sid)
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	call, exists := state.calls[callSID]
 	if !exists {
 		return nil, fmt.Errorf("call %s not found", sid)
 	}
-	return buildAPICallResponse(call, e.apiVersion), nil
+	resp := buildAPICallResponse(call, e.apiVersion)
+
+	return resp, nil
 }
 
 // FetchConference returns a Twilio-style conference response by SID
-func (e *EngineImpl) FetchConference(sid string, _ *twilioopenapi.FetchConferenceParams) (*twilioopenapi.ApiV2010Conference, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+func (e *EngineImpl) FetchConference(sid string, params *twilioopenapi.FetchConferenceParams) (*twilioopenapi.ApiV2010Conference, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	accountSID := model.SID(*params.PathAccountSid)
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
-	// Search all subaccounts for a conference with this SID
-	for _, confs := range e.conferences {
-		for _, conf := range confs {
-			if string(conf.SID) == sid {
-				sidStr := string(conf.SID)
-				status := string(conf.Status)
+	if !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
 
-				return &twilioopenapi.ApiV2010Conference{
-					Sid:    &sidStr,
-					Status: &status,
-				}, nil
-			}
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	for _, conf := range state.conferences {
+		if string(conf.SID) == sid {
+			sidStr := string(conf.SID)
+			status := string(conf.Status)
+			return &twilioopenapi.ApiV2010Conference{
+				Sid:    &sidStr,
+				Status: &status,
+			}, nil
 		}
 	}
 
@@ -1055,20 +1168,21 @@ func (e *EngineImpl) ListConference(params *twilioopenapi.ListConferenceParams) 
 		friendlyName = *params.FriendlyName
 	}
 
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
-	if _, exists := e.subAccounts[accountSID]; !exists {
+	if !exists {
 		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
-	confs, exists := e.conferences[accountSID]
-	if !exists {
-		return []twilioopenapi.ApiV2010Conference{}, nil
-	}
+	// Lock only this subaccount
+	state.mu.RLock()
+	defer state.mu.RUnlock()
 
 	result := make([]twilioopenapi.ApiV2010Conference, 0)
-	for _, conf := range confs {
+	for _, conf := range state.conferences {
 		// Filter by friendly name if provided (friendly name is the conference Name)
 		if friendlyName != "" && conf.Name != friendlyName {
 			continue
@@ -1088,23 +1202,26 @@ func (e *EngineImpl) ListConference(params *twilioopenapi.ListConferenceParams) 
 
 // UpdateConference updates a conference's status
 func (e *EngineImpl) UpdateConference(sid string, params *twilioopenapi.UpdateConferenceParams) (*twilioopenapi.ApiV2010Conference, error) {
-	if params == nil {
-		return nil, fmt.Errorf("params is required")
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	accountSID := model.SID(*params.PathAccountSid)
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	state.mu.Lock()
+	defer state.mu.Lock()
 
-	// Search all subaccounts for the conference
 	var conf *model.Conference
-	for _, confs := range e.conferences {
-		for _, c := range confs {
-			if string(c.SID) == sid {
-				conf = c
-				break
-			}
-		}
-		if conf != nil {
+	for _, cnf := range state.conferences {
+		if string(cnf.SID) == sid {
+			conf = cnf
 			break
 		}
 	}
@@ -1119,7 +1236,7 @@ func (e *EngineImpl) UpdateConference(sid string, params *twilioopenapi.UpdateCo
 		switch statusStr {
 		case "completed":
 			conf.Status = model.ConferenceCompleted
-			now := e.clockNowLocked(conf.AccountSID)
+			now := state.clock.Now()
 			conf.EndedAt = &now
 			conf.Timeline = append(conf.Timeline, model.NewEvent(
 				now,
@@ -1146,20 +1263,27 @@ func (e *EngineImpl) UpdateConference(sid string, params *twilioopenapi.UpdateCo
 }
 
 // FetchParticipant retrieves a participant from a conference
-func (e *EngineImpl) FetchParticipant(conferenceSid string, callSid string, _ *twilioopenapi.FetchParticipantParams) (*twilioopenapi.ApiV2010Participant, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+func (e *EngineImpl) FetchParticipant(conferenceSid string, callSid string, params *twilioopenapi.FetchParticipantParams) (*twilioopenapi.ApiV2010Participant, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	accountSID := model.SID(*params.PathAccountSid)
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
-	// Search all subaccounts for the conference
+	if !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	state.mu.Lock()
+	defer state.mu.Lock()
+
 	var conf *model.Conference
-	for _, confs := range e.conferences {
-		for _, c := range confs {
-			if string(c.SID) == conferenceSid {
-				conf = c
-				break
-			}
-		}
-		if conf != nil {
+	for _, cnf := range state.conferences {
+		if string(cnf.SID) == conferenceSid {
+			conf = cnf
 			break
 		}
 	}
@@ -1194,23 +1318,26 @@ func (e *EngineImpl) FetchParticipant(conferenceSid string, callSid string, _ *t
 
 // UpdateParticipant updates a participant in a conference
 func (e *EngineImpl) UpdateParticipant(conferenceSid string, callSid string, params *twilioopenapi.UpdateParticipantParams) (*twilioopenapi.ApiV2010Participant, error) {
-	if params == nil {
-		return nil, fmt.Errorf("params is required")
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	accountSID := model.SID(*params.PathAccountSid)
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	state.mu.Lock()
+	defer state.mu.Lock()
 
-	// Search all subaccounts for the conference
 	var conf *model.Conference
-	for _, confs := range e.conferences {
-		for _, c := range confs {
-			if string(c.SID) == conferenceSid {
-				conf = c
-				break
-			}
-		}
-		if conf != nil {
+	for _, cnf := range state.conferences {
+		if string(cnf.SID) == conferenceSid {
+			conf = cnf
 			break
 		}
 	}
@@ -1234,54 +1361,54 @@ func (e *EngineImpl) UpdateParticipant(conferenceSid string, callSid string, par
 	}
 
 	// Get the call for timeline events
-	call, exists := e.calls[callSIDModel]
+	call, exists := state.calls[callSIDModel]
 	if !exists {
 		return nil, fmt.Errorf("call %s not found", callSid)
 	}
 
 	// Get or create participant state for this (conference, call) pair
 	conferenceSIDModel := model.SID(conferenceSid)
-	if e.participantStates[conferenceSIDModel] == nil {
-		e.participantStates[conferenceSIDModel] = make(map[model.SID]*model.ParticipantState)
+	if state.participantStates[conferenceSIDModel] == nil {
+		state.participantStates[conferenceSIDModel] = make(map[model.SID]*model.ParticipantState)
 	}
 
-	state := e.participantStates[conferenceSIDModel][callSIDModel]
-	if state == nil {
-		state = &model.ParticipantState{}
-		e.participantStates[conferenceSIDModel][callSIDModel] = state
+	partState := state.participantStates[conferenceSIDModel][callSIDModel]
+	if partState == nil {
+		partState = &model.ParticipantState{}
+		state.participantStates[conferenceSIDModel][callSIDModel] = partState
 	}
 
 	// Update participant state
-	now := e.clockNowLocked(conf.AccountSID)
+	now := state.clock.Now()
 	updatedFields := make(map[string]any)
 
 	if params.Muted != nil {
-		state.Muted = *params.Muted
+		partState.Muted = *params.Muted
 		updatedFields["muted"] = *params.Muted
 	}
 
 	if params.Hold != nil {
-		state.Hold = *params.Hold
+		partState.Hold = *params.Hold
 		updatedFields["hold"] = *params.Hold
 	}
 
 	if params.HoldUrl != nil {
-		state.HoldUrl = *params.HoldUrl
+		partState.HoldUrl = *params.HoldUrl
 		updatedFields["hold_url"] = *params.HoldUrl
 	}
 
 	if params.HoldMethod != nil {
-		state.HoldMethod = *params.HoldMethod
+		partState.HoldMethod = *params.HoldMethod
 		updatedFields["hold_method"] = *params.HoldMethod
 	}
 
 	if params.AnnounceUrl != nil {
-		state.AnnounceUrl = *params.AnnounceUrl
+		partState.AnnounceUrl = *params.AnnounceUrl
 		updatedFields["announce_url"] = *params.AnnounceUrl
 	}
 
 	if params.AnnounceMethod != nil {
-		state.AnnounceMethod = *params.AnnounceMethod
+		partState.AnnounceMethod = *params.AnnounceMethod
 		updatedFields["announce_method"] = *params.AnnounceMethod
 	}
 
@@ -1317,92 +1444,113 @@ func (e *EngineImpl) FetchRecording(sid string, _ *twilioopenapi.FetchRecordingP
 }
 
 // GetCallState exposes the internal call model for inspection (tests, console)
-func (e *EngineImpl) GetCallState(callSID model.SID) (*model.Call, bool) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	call, exists := e.calls[callSID]
-	return call, exists
-}
+func (e *EngineImpl) GetCallState(subaccountSID, callSID model.SID) (*model.Call, bool) {
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[subaccountSID]
+	e.subAccountsMu.RUnlock()
 
-// GetParticipantState exposes the participant state for a specific call in a conference
-func (e *EngineImpl) GetParticipantState(conferenceSID model.SID, callSID model.SID) (*model.ParticipantState, bool) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	if states, exists := e.participantStates[conferenceSID]; exists {
-		state, found := states[callSID]
-		return state, found
+	if !exists {
+		return nil, false
 	}
-	return nil, false
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	call, exists := state.calls[callSID]
+	if !exists {
+		return nil, false
+	}
+	return call, true
 }
 
 // ListCalls returns all calls matching the filter
 func (e *EngineImpl) ListCalls(filter CallFilter) []*model.Call {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	e.subAccountsMu.RLock()
+	states := make([]*subAccountState, 0, len(e.subAccounts))
+	for _, state := range e.subAccounts {
+		states = append(states, state)
+	}
+	e.subAccountsMu.RUnlock()
 
 	var result []*model.Call
-	for _, call := range e.calls {
-		if filter.To != "" && call.To != filter.To {
-			continue
+	for _, state := range states {
+		state.mu.RLock()
+		for _, call := range state.calls {
+			if filter.To != "" && call.To != filter.To {
+				continue
+			}
+			if filter.From != "" && call.From != filter.From {
+				continue
+			}
+			if filter.Status != nil && call.Status != *filter.Status {
+				continue
+			}
+			result = append(result, call)
 		}
-		if filter.From != "" && call.From != filter.From {
-			continue
-		}
-		if filter.Status != nil && call.Status != *filter.Status {
-			continue
-		}
-		result = append(result, call)
+		state.mu.RUnlock()
 	}
 	return result
 }
 
 // GetQueue retrieves a queue by name and subaccount
 func (e *EngineImpl) GetQueue(accountSID model.SID, name string) (*model.Queue, bool) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if queues, exists := e.queues[accountSID]; exists {
-		queue, found := queues[name]
-		return queue, found
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, false
 	}
-	return nil, false
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	queue, found := state.queues[name]
+	return queue, found
 }
 
 // GetConference retrieves a conference by name and subaccount
 func (e *EngineImpl) GetConference(accountSID model.SID, name string) (*model.Conference, bool) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if confs, exists := e.conferences[accountSID]; exists {
-		conf, found := confs[name]
-		return conf, found
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, false
 	}
-	return nil, false
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	conf, found := state.conferences[name]
+	return conf, found
 }
 
 // Snapshot returns a deep copy of the current state for a specific subaccount
 func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
-	// Validate subaccount exists
-	subAccount, exists := e.subAccounts[accountSID]
 	if !exists {
 		return nil, fmt.Errorf("subaccount %s not found", accountSID)
 	}
+
+	// Lock only this subaccount
+	state.mu.RLock()
+	defer state.mu.RUnlock()
 
 	snap := &StateSnapshot{
 		Calls:       make(map[model.SID]*model.Call),
 		Queues:      make(map[string]*model.Queue),
 		Conferences: make(map[string]*model.Conference),
 		SubAccounts: make(map[model.SID]*model.SubAccount),
-		Timestamp:   e.clockNowLocked(accountSID),
+		Timestamp:   state.clock.Now(),
 	}
 
 	// Only include calls for this subaccount
-	for sid, call := range e.calls {
-		if call.AccountSID != accountSID {
-			continue
-		}
+	for sid, call := range state.calls {
 		callCopy := *call
 		callCopy.Timeline = append([]model.Event{}, call.Timeline...)
 		callCopy.Variables = make(map[string]string)
@@ -1413,33 +1561,29 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 	}
 
 	// Only include queues for this subaccount
-	if queues, exists := e.queues[accountSID]; exists {
-		for name, queue := range queues {
-			queueCopy := *queue
-			queueCopy.Members = append([]model.SID{}, queue.Members...)
-			queueCopy.Timeline = append([]model.Event{}, queue.Timeline...)
-			snap.Queues[name] = &queueCopy
-		}
+	for name, queue := range state.queues {
+		queueCopy := *queue
+		queueCopy.Members = append([]model.SID{}, queue.Members...)
+		queueCopy.Timeline = append([]model.Event{}, queue.Timeline...)
+		snap.Queues[name] = &queueCopy
 	}
 
 	// Only include conferences for this subaccount
-	if confs, exists := e.conferences[accountSID]; exists {
-		for name, conf := range confs {
-			confCopy := *conf
-			confCopy.Participants = append([]model.SID{}, conf.Participants...)
-			confCopy.Timeline = append([]model.Event{}, conf.Timeline...)
-			snap.Conferences[name] = &confCopy
-		}
+	for name, conf := range state.conferences {
+		confCopy := *conf
+		confCopy.Participants = append([]model.SID{}, conf.Participants...)
+		confCopy.Timeline = append([]model.Event{}, conf.Timeline...)
+		snap.Conferences[name] = &confCopy
 	}
 
 	// Only include this subaccount
-	saCopy := *subAccount
-	if subAccount.IncomingNumbers != nil {
-		saCopy.IncomingNumbers = append([]model.IncomingNumber{}, subAccount.IncomingNumbers...)
+	saCopy := *state.account
+	if state.account.IncomingNumbers != nil {
+		saCopy.IncomingNumbers = append([]model.IncomingNumber{}, state.account.IncomingNumbers...)
 	}
-	if subAccount.Applications != nil {
-		apps := make([]model.Application, len(subAccount.Applications))
-		copy(apps, subAccount.Applications)
+	if state.account.Applications != nil {
+		apps := make([]model.Application, len(state.account.Applications))
+		copy(apps, state.account.Applications)
 		saCopy.Applications = apps
 	}
 	snap.SubAccounts[accountSID] = &saCopy
@@ -1449,8 +1593,12 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 
 // SnapshotAll returns a deep copy of the current state for all subaccounts
 func (e *EngineImpl) SnapshotAll() *StateSnapshot {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	e.subAccountsMu.RLock()
+	states := make([]*subAccountState, 0, len(e.subAccounts))
+	for _, state := range e.subAccounts {
+		states = append(states, state)
+	}
+	e.subAccountsMu.RUnlock()
 
 	snap := &StateSnapshot{
 		Calls:       make(map[model.SID]*model.Call),
@@ -1460,49 +1608,59 @@ func (e *EngineImpl) SnapshotAll() *StateSnapshot {
 		Timestamp:   e.defaultClock.Now(),
 	}
 
-	// Include all calls
-	for sid, call := range e.calls {
-		callCopy := *call
-		callCopy.Timeline = append([]model.Event{}, call.Timeline...)
-		callCopy.Variables = make(map[string]string)
-		for k, v := range call.Variables {
-			callCopy.Variables[k] = v
+	// Include all calls from all subaccounts
+	for _, state := range states {
+		state.mu.RLock()
+		for sid, call := range state.calls {
+			callCopy := *call
+			callCopy.Timeline = append([]model.Event{}, call.Timeline...)
+			callCopy.Variables = make(map[string]string)
+			for k, v := range call.Variables {
+				callCopy.Variables[k] = v
+			}
+			snap.Calls[sid] = &callCopy
 		}
-		snap.Calls[sid] = &callCopy
+		state.mu.RUnlock()
 	}
 
 	// Flatten queues from all subaccounts
-	for _, queues := range e.queues {
-		for name, queue := range queues {
+	for _, state := range states {
+		state.mu.RLock()
+		for name, queue := range state.queues {
 			queueCopy := *queue
 			queueCopy.Members = append([]model.SID{}, queue.Members...)
 			queueCopy.Timeline = append([]model.Event{}, queue.Timeline...)
 			snap.Queues[name] = &queueCopy
 		}
+		state.mu.RUnlock()
 	}
 
 	// Flatten conferences from all subaccounts
-	for _, confs := range e.conferences {
-		for name, conf := range confs {
+	for _, state := range states {
+		state.mu.RLock()
+		for name, conf := range state.conferences {
 			confCopy := *conf
 			confCopy.Participants = append([]model.SID{}, conf.Participants...)
 			confCopy.Timeline = append([]model.Event{}, conf.Timeline...)
 			snap.Conferences[name] = &confCopy
 		}
+		state.mu.RUnlock()
 	}
 
 	// Include all subaccounts
-	for sid, sa := range e.subAccounts {
-		saCopy := *sa
-		if sa.IncomingNumbers != nil {
-			saCopy.IncomingNumbers = append([]model.IncomingNumber{}, sa.IncomingNumbers...)
+	for _, state := range states {
+		state.mu.RLock()
+		saCopy := *state.account
+		if state.account.IncomingNumbers != nil {
+			saCopy.IncomingNumbers = append([]model.IncomingNumber{}, state.account.IncomingNumbers...)
 		}
-		if sa.Applications != nil {
-			apps := make([]model.Application, len(sa.Applications))
-			copy(apps, sa.Applications)
+		if state.account.Applications != nil {
+			apps := make([]model.Application, len(state.account.Applications))
+			copy(apps, state.account.Applications)
 			saCopy.Applications = apps
 		}
-		snap.SubAccounts[sid] = &saCopy
+		snap.SubAccounts[state.account.SID] = &saCopy
+		state.mu.RUnlock()
 	}
 
 	return snap
@@ -1546,9 +1704,7 @@ func buildAPICallResponse(call *model.Call, apiVersion string) *twilioopenapi.Ap
 
 // SetAutoTime switches between manual and auto time
 func (e *EngineImpl) SetAutoTime(enabled bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
+	// No lock needed - defaultClock is atomically replaced and reads are safe
 	if enabled {
 		if _, ok := e.defaultClock.(*AutoClock); !ok {
 			log.Println("Switching to auto clock")
@@ -1564,9 +1720,7 @@ func (e *EngineImpl) SetAutoTime(enabled bool) {
 
 // Advance advances the manual clock or auto-advancable clock (no-op for pure auto clock)
 func (e *EngineImpl) Advance(d time.Duration) {
-	e.mu.RLock()
 	clock := e.defaultClock
-	e.mu.RUnlock()
 
 	if mc, ok := clock.(*ManualClock); ok {
 		mc.Advance(d)
@@ -1577,8 +1731,6 @@ func (e *EngineImpl) Advance(d time.Duration) {
 
 // Clock returns the current clock
 func (e *EngineImpl) Clock() Clock {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
 	return e.defaultClock
 }
 
@@ -1587,66 +1739,80 @@ func (e *EngineImpl) Close() error {
 	e.cancel()
 	e.wg.Wait()
 
-	e.mu.RLock()
 	if aac, ok := e.defaultClock.(*AutoAdvancableClock); ok {
 		aac.Stop()
 	}
-	for _, clock := range e.subAccountClocks {
-		if aac, ok := clock.(*AutoAdvancableClock); ok {
+	e.subAccountsMu.Lock()
+	defer e.subAccountsMu.Unlock()
+	for _, sa := range e.subAccounts {
+		if aac, ok := sa.clock.(*AutoAdvancableClock); ok {
 			aac.Stop()
 		}
 	}
-	e.mu.RUnlock()
 	return nil
-}
-
-// getClockForAccountLocked returns the clock for a specific subaccount.
-// Caller must already hold e.mu (read or write).
-func (e *EngineImpl) getClockForAccountLocked(accountSID model.SID) Clock {
-	if clock, exists := e.subAccountClocks[accountSID]; exists {
-		return clock
-	}
-	return e.defaultClock
 }
 
 // getClockForAccount returns the clock for a specific subaccount,
 // or the default clock if no subaccount-specific clock is set
-func (e *EngineImpl) getClockForAccount(accountSID model.SID) Clock {
-	e.mu.RLock()
-	clock := e.getClockForAccountLocked(accountSID)
-	e.mu.RUnlock()
-	return clock
-}
+//func (e *EngineImpl) getClockForAccount(accountSID model.SID) Clock {
+//	if clock, exists := e.subAccountClocks[accountSID]; exists {
+//		return clock
+//	}
+//	return e.defaultClock
+//}
 
-// clockNow is a convenience helper that gets the current time for a specific account
-// without requiring the caller to manage locking.
-func (e *EngineImpl) clockNow(accountSID model.SID) time.Time {
-	return e.getClockForAccount(accountSID).Now()
-}
-
-// clockNowLocked gets the current time assuming the caller already holds e.mu.
-func (e *EngineImpl) clockNowLocked(accountSID model.SID) time.Time {
-	return e.getClockForAccountLocked(accountSID).Now()
-}
+// findCallState searches all subaccounts for a call and returns its state and the call.
+// Returns nil if the call is not found.
+//func (e *EngineImpl) findCallState(callSID model.SID) (*subAccountState, *model.Call) {
+//	e.subAccountsMu.RLock()
+//	defer e.subAccountsMu.RUnlock()
+//
+//	for _, state := range e.subAccounts {
+//		state.mu.RLock()
+//		call, exists := state.calls[callSID]
+//		if exists {
+//			state.mu.RUnlock()
+//			return state, call
+//		}
+//		state.mu.RUnlock()
+//	}
+//	return nil, nil
+//}
 
 // SetClockForAccount sets a custom clock for a specific subaccount (testing only)
-func (e *EngineImpl) SetClockForAccount(accountSID model.SID, clock Clock) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.subAccountClocks[accountSID] = clock
+func (e *EngineImpl) SetClockForAccount(accountSID model.SID, clock Clock) error {
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("subaccount %s not found", accountSID)
+	}
+
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.clock = clock
+	return nil
 }
 
 // AdvanceForAccount advances the clock for a specific subaccount.
 // Returns an error if no custom clock has been set for this account.
 func (e *EngineImpl) AdvanceForAccount(accountSID model.SID, d time.Duration) error {
-	e.mu.RLock()
-	clock, exists := e.subAccountClocks[accountSID]
-	e.mu.RUnlock()
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("no custom clock set for account %s; use SetClockForAccount first", accountSID)
+		return fmt.Errorf("subaccount %s not found", accountSID)
 	}
 
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	clock := state.clock
 	if mc, ok := clock.(*ManualClock); ok {
 		mc.Advance(d)
 	} else if aac, ok := clock.(*AutoAdvancableClock); ok {
@@ -1656,8 +1822,8 @@ func (e *EngineImpl) AdvanceForAccount(accountSID model.SID, d time.Duration) er
 	return nil
 }
 
-// Internal helper to update call status and notify
-func (e *EngineImpl) updateCallStatus(call *model.Call, newStatus model.CallStatus) {
+// updateCallStatusLocked updates call status. Caller must hold state.mu.
+func (e *EngineImpl) updateCallStatusLocked(state *subAccountState, call *model.Call, newStatus model.CallStatus) {
 	if call.Status == newStatus {
 		return
 	}
@@ -1667,7 +1833,7 @@ func (e *EngineImpl) updateCallStatus(call *model.Call, newStatus model.CallStat
 
 	// Add timeline event
 	call.Timeline = append(call.Timeline, model.NewEvent(
-		e.clockNowLocked(call.AccountSID),
+		state.clock.Now(),
 		"status.changed",
 		map[string]any{
 			"from": oldStatus,
@@ -1677,7 +1843,7 @@ func (e *EngineImpl) updateCallStatus(call *model.Call, newStatus model.CallStat
 
 	// Trigger status callback if configured and user is interested in this event
 	if call.StatusCallback != "" && e.shouldSendStatusCallback(call, newStatus) {
-		go e.sendStatusCallback(call)
+		go e.sendStatusCallback(state, call)
 	}
 }
 
@@ -1700,18 +1866,19 @@ func (e *EngineImpl) shouldSendStatusCallback(call *model.Call, status model.Cal
 }
 
 // sendStatusCallback posts to the status callback URL
-func (e *EngineImpl) sendStatusCallback(call *model.Call) {
-	form := e.buildCallbackForm(call)
+func (e *EngineImpl) sendStatusCallback(state *subAccountState, call *model.Call) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	form := e.buildCallbackForm(state.clock, call)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	status, body, headers, err := e.webhook.POST(ctx, call.StatusCallback, form)
 
-	// Log the webhook
-	e.mu.Lock()
+	// Log the webhook - find and lock the subaccount
 	call.Timeline = append(call.Timeline, model.NewEvent(
-		e.clockNowLocked(call.AccountSID),
+		state.clock.Now(),
 		"webhook.status_callback",
 		map[string]any{
 			"url":         call.StatusCallback,
@@ -1722,11 +1889,10 @@ func (e *EngineImpl) sendStatusCallback(call *model.Call) {
 			"body":        string(body),
 		},
 	))
-	e.mu.Unlock()
 }
 
 // buildCallbackForm builds form data for Twilio-style callbacks
-func (e *EngineImpl) buildCallbackForm(call *model.Call) url.Values {
+func (e *EngineImpl) buildCallbackForm(clock Clock, call *model.Call) url.Values {
 	form := url.Values{}
 	form.Set("CallSid", string(call.SID))
 	form.Set("AccountSid", string(call.AccountSID))
@@ -1735,7 +1901,7 @@ func (e *EngineImpl) buildCallbackForm(call *model.Call) url.Values {
 	form.Set("CallStatus", string(call.Status))
 	form.Set("Direction", string(call.Direction))
 	form.Set("ApiVersion", e.apiVersion)
-	form.Set("Timestamp", e.clockNow(call.AccountSID).Format(time.RFC3339))
+	form.Set("Timestamp", clock.Now().Format(time.RFC3339))
 
 	if call.ParentCallSID != nil {
 		form.Set("ParentCallSid", string(*call.ParentCallSID))
@@ -1744,14 +1910,9 @@ func (e *EngineImpl) buildCallbackForm(call *model.Call) url.Values {
 	return form
 }
 
-// getOrCreateQueue gets or creates a queue for a subaccount. Caller must hold e.mu.
-func (e *EngineImpl) getOrCreateQueue(accountSID model.SID, name string) *model.Queue {
-	// Ensure the subaccount map exists
-	if _, exists := e.queues[accountSID]; !exists {
-		e.queues[accountSID] = make(map[string]*model.Queue)
-	}
-
-	if queue, exists := e.queues[accountSID][name]; exists {
+// getOrCreateQueueLocked gets or creates a queue for a subaccount. Caller must hold state.mu.
+func (e *EngineImpl) getOrCreateQueueLocked(state *subAccountState, accountSID model.SID, name string) *model.Queue {
+	if queue, exists := state.queues[name]; exists {
 		return queue
 	}
 
@@ -1762,26 +1923,23 @@ func (e *EngineImpl) getOrCreateQueue(accountSID model.SID, name string) *model.
 		Members:    []model.SID{},
 		Timeline:   []model.Event{},
 	}
+	now := state.clock.Now()
 	queue.Timeline = append(queue.Timeline, model.NewEvent(
-		e.clockNowLocked(accountSID),
+		now,
 		"queue.created",
 		map[string]any{"name": name, "sid": queue.SID, "account_sid": accountSID},
 	))
-	e.queues[accountSID][name] = queue
+	state.queues[name] = queue
 	return queue
 }
 
-// getOrCreateConference gets or creates a conference for a subaccount. Caller must hold e.mu.
-func (e *EngineImpl) getOrCreateConference(accountSID model.SID, name string) *model.Conference {
-	// Ensure the subaccount map exists
-	if _, exists := e.conferences[accountSID]; !exists {
-		e.conferences[accountSID] = make(map[string]*model.Conference)
-	}
-
-	if conf, exists := e.conferences[accountSID][name]; exists {
+// getOrCreateConferenceLocked gets or creates a conference for a subaccount. Caller must hold state.mu.
+func (e *EngineImpl) getOrCreateConferenceLocked(state *subAccountState, accountSID model.SID, name string) *model.Conference {
+	if conf, exists := state.conferences[name]; exists {
 		return conf
 	}
 
+	now := state.clock.Now()
 	conf := &model.Conference{
 		Name:         name,
 		SID:          model.NewConferenceSID(),
@@ -1789,13 +1947,87 @@ func (e *EngineImpl) getOrCreateConference(accountSID model.SID, name string) *m
 		Participants: []model.SID{},
 		Status:       model.ConferenceCreated,
 		Timeline:     []model.Event{},
-		CreatedAt:    e.clockNowLocked(accountSID),
+		CreatedAt:    now,
 	}
 	conf.Timeline = append(conf.Timeline, model.NewEvent(
-		e.clockNowLocked(accountSID),
+		now,
 		"conference.created",
 		map[string]any{"name": name, "sid": conf.SID, "account_sid": accountSID},
 	))
-	e.conferences[accountSID][name] = conf
+	state.conferences[name] = conf
 	return conf
 }
+
+// Helper methods for CallRunner to use without needing to manage locks
+
+// getOrCreateQueue is a public wrapper that handles locking
+func (e *EngineImpl) getOrCreateQueue(accountSID model.SID, name string) *model.Queue {
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return e.getOrCreateQueueLocked(state, accountSID, name)
+}
+
+// getOrCreateConference is a public wrapper that handles locking
+func (e *EngineImpl) getOrCreateConference(accountSID model.SID, name string) *model.Conference {
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return e.getOrCreateConferenceLocked(state, accountSID, name)
+}
+
+//
+//// lockCall locks the subaccount containing the call and returns an unlock function
+//func (e *EngineImpl) lockCall(callSID model.SID) func() {
+//	state, _ := e.findCallState(callSID)
+//	if state != nil {
+//		state.mu.Lock()
+//		return func() { state.mu.Unlock() }
+//	}
+//	return func() {}
+//}
+//
+//// rlockCall read-locks the subaccount containing the call and returns an unlock function
+//func (e *EngineImpl) rlockCall(callSID model.SID) func() {
+//	state, _ := e.findCallState(callSID)
+//	if state != nil {
+//		state.mu.RLock()
+//		return func() { state.mu.RUnlock() }
+//	}
+//	return func() {}
+//}
+//
+//// getRunner retrieves a call runner by call SID
+//func (e *EngineImpl) getRunner(callSID model.SID) *CallRunner {
+//	state, _ := e.findCallState(callSID)
+//	if state == nil {
+//		return nil
+//	}
+//
+//	state.mu.RLock()
+//	defer state.mu.RUnlock()
+//	return state.runners[callSID]
+//}
+//
+//// getCallBySID retrieves a call by SID
+//func (e *EngineImpl) getCallBySID(callSID model.SID) *model.Call {
+//	state, call := e.findCallState(callSID)
+//	if state == nil || call == nil {
+//		return nil
+//	}
+//	return call
+//}

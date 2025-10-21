@@ -90,7 +90,7 @@ func TestCreateIncomingCall(t *testing.T) {
 	}
 
 	callSID := model.SID(*apiCall.Sid)
-	call, ok := e.GetCallState(callSID)
+	call, ok := e.GetCallState(subAccount.SID, callSID)
 	if !ok {
 		t.Fatalf("call %s not found after creation", callSID)
 	}
@@ -118,7 +118,7 @@ func TestCreateIncomingCall(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify call completed
-	call, _ = e.GetCallState(callSID)
+	call, _ = e.GetCallState(subAccount.SID, callSID)
 	if call.Status != model.CallCompleted {
 		t.Errorf("Expected call completed, got %s", call.Status)
 	}
@@ -279,7 +279,7 @@ func TestCreateIncomingCallWithStatusCallback(t *testing.T) {
 	}
 
 	// Verify call has status callback events in timeline
-	call, _ := e.GetCallState(callSID)
+	call, _ := e.GetCallState(subAccount.SID, callSID)
 	hasStatusCallback := false
 	for _, event := range call.Timeline {
 		if event.Type == "webhook.status_callback" {

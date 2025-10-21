@@ -199,6 +199,7 @@ func main() {
 	log.Println("")
 
 	createCall := func(params *openapi.CreateCallParams) *model.Call {
+		params.SetPathAccountSid(string(subAccount.SID))
 		apiCall, err := e.CreateCall(params)
 		if err != nil {
 			log.Fatalf("Failed to create call: %v", err)
@@ -207,7 +208,7 @@ func main() {
 			log.Fatalf("CreateCall did not return SID")
 		}
 		sid := model.SID(*apiCall.Sid)
-		call, ok := e.GetCallState(sid)
+		call, ok := e.GetCallState(subAccount.SID, sid)
 		if !ok {
 			log.Fatalf("Call %s not found after creation", sid)
 		}
@@ -238,14 +239,14 @@ func main() {
 		log.Printf("   Created call %s\n", call1.SID)
 
 		time.Sleep(2 * time.Second)
-		e.AnswerCall(call1.SID)
+		e.AnswerCall(subAccount.SID, call1.SID)
 		log.Printf("   Answered call %s\n", call1.SID)
 		time.Sleep(2 * time.Second)
 		log.Println("2. Creating agent call to handle queue...")
 		call2 := createCall(newCallParams("+15551234002", "+18005551001", testSrv.URL+"/voice/agent"))
 		log.Printf("   Created call %s\n", call2.SID)
 		time.Sleep(3 * time.Second)
-		e.AnswerCall(call2.SID)
+		e.AnswerCall(subAccount.SID, call2.SID)
 		log.Printf("   Answered call %s\n", call2.SID)
 		time.Sleep(2 * time.Second)
 
@@ -255,7 +256,7 @@ func main() {
 			call := createCall(newCallParams(from, "+18005551002", testSrv.URL+"/voice/conference"))
 			log.Printf("   Created conference call %s\n", call.SID)
 			time.Sleep(500 * time.Millisecond)
-			e.AnswerCall(call.SID)
+			e.AnswerCall(subAccount.SID, call.SID)
 			log.Printf("   Answered call %s\n", call.SID)
 		}
 
@@ -266,18 +267,18 @@ func main() {
 		log.Printf("   Created call %s\n", call3.SID)
 
 		time.Sleep(1 * time.Second)
-		e.AnswerCall(call3.SID)
+		e.AnswerCall(subAccount.SID, call3.SID)
 		log.Printf("   Answered call %s\n", call3.SID)
 		time.Sleep(2 * time.Second)
 		log.Println("5. Simulating digit press (2 for support)...")
-		e.SendDigits(call3.SID, "2")
+		e.SendDigits(subAccount.SID, call3.SID, "2")
 		time.Sleep(2 * time.Second)
 
 		log.Println("6. Creating voicemail/record demo call...")
 		call4 := createCall(newCallParams("+15551234005", "+18005551004", testSrv.URL+"/voice/record"))
 		log.Printf("   Created call %s\n", call4.SID)
 		time.Sleep(1 * time.Second)
-		e.AnswerCall(call4.SID)
+		e.AnswerCall(subAccount.SID, call4.SID)
 		log.Printf("   Answered call %s\n", call4.SID)
 		time.Sleep(3 * time.Second)
 		log.Println("   Simulating caller leaving message (waiting for timeout)...")

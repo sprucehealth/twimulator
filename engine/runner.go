@@ -19,6 +19,7 @@ var ErrCallHungup = errors.New("call hungup via Hangup verb")
 type CallRunner struct {
 	call    *model.Call
 	clock   Clock
+	state   *subAccountState
 	engine  *EngineImpl
 	timeout time.Duration
 
@@ -33,10 +34,11 @@ type CallRunner struct {
 }
 
 // NewCallRunner creates a new call runner
-func NewCallRunner(call *model.Call, clock Clock, engine *EngineImpl, timeout time.Duration) *CallRunner {
+func NewCallRunner(call *model.Call, state *subAccountState, engine *EngineImpl, timeout time.Duration) *CallRunner {
 	return &CallRunner{
 		call:      call,
-		clock:     clock,
+		clock:     state.clock,
+		state:     state,
 		engine:    engine,
 		timeout:   timeout,
 		gatherCh:  make(chan string, 1),
@@ -87,9 +89,9 @@ func (r *CallRunner) answer(ctx context.Context) {
 	answerNow := func() {
 		r.updateStatus(model.CallInProgress)
 		now := r.clock.Now()
-		r.engine.mu.Lock()
+		r.state.mu.Lock()
 		r.call.AnsweredAt = &now
-		r.engine.mu.Unlock()
+		r.state.mu.Unlock()
 	}
 	if r.call.Direction != model.Inbound {
 		// an outbound call is answered first, and then it's url is fetched
@@ -127,9 +129,9 @@ func (r *CallRunner) answer(ctx context.Context) {
 	case <-r.hangupCh:
 		r.updateStatus(model.CallCompleted)
 		now := r.clock.Now()
-		r.engine.mu.Lock()
+		r.state.mu.Lock()
 		r.call.EndedAt = &now
-		r.engine.mu.Unlock()
+		r.state.mu.Unlock()
 		return
 	}
 }
@@ -296,9 +298,9 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 		"action":     gather.Action,
 	})
 
-	r.engine.mu.Lock()
+	r.state.mu.Lock()
 	r.call.CurrentEndpoint = "gather"
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 
 	// Execute nested children while gathering
 	for _, child := range gather.Children {
@@ -345,10 +347,10 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 		r.addEvent("gather.timeout", map[string]any{})
 	}
 
-	r.engine.mu.Lock()
+	r.state.mu.Lock()
 	r.call.CurrentEndpoint = ""
 	r.call.Variables["Digits"] = digits
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 
 	// Call action callback with gathered digits
 	form := url.Values{}
@@ -381,7 +383,6 @@ func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentT
 }
 
 func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial, currentTwimlDocumentURL string) error {
-	r.engine.mu.Lock()
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, dial.Queue)
 	queueSID := queue.SID
 
@@ -391,7 +392,6 @@ func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial, cur
 		// Get the first waiting caller (FIFO)
 		targetCallSID = queue.Members[0]
 	}
-	r.engine.mu.Unlock()
 
 	// Two scenarios:
 	// 1. If there's a waiting caller, bridge with them
@@ -416,9 +416,9 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 	})
 
 	// Get the target call's runner to dequeue it
-	r.engine.mu.Lock()
-	targetRunner := r.engine.runners[targetCallSID]
-	targetCall := r.engine.calls[targetCallSID]
+	r.state.mu.Lock()
+	targetRunner := r.state.runners[targetCallSID]
+	targetCall := r.state.calls[targetCallSID]
 
 	// Calculate how long target was in queue
 	var targetQueueStart time.Time
@@ -428,7 +428,7 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 			break
 		}
 	}
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 
 	// Signal the target call to dequeue with "bridged" result
 	if targetRunner != nil {
@@ -477,7 +477,7 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queue *model.Queue, queueSID model.SID, currentTwimlDocumentURL string) error {
 	startTime := r.clock.Now()
 
-	r.engine.mu.Lock()
+	r.state.mu.Lock()
 	// Add this call to the queue
 	queue.Members = append(queue.Members, r.call.SID)
 	queue.Timeline = append(queue.Timeline, model.NewEvent(
@@ -487,7 +487,7 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	))
 
 	r.call.CurrentEndpoint = "queue:" + dial.Queue
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 
 	r.addEvent("dial.queue.joined", map[string]any{
 		"queue":     dial.Queue,
@@ -515,12 +515,12 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	}
 
 	// Calculate time in queue
-	r.engine.mu.Lock()
+	r.state.mu.Lock()
 	endTime := r.clock.Now()
 	queueTime := int(endTime.Sub(startTime).Seconds())
 	r.removeFromQueue(queue)
 	r.call.CurrentEndpoint = ""
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 
 	r.addEvent("dial.queue.left", map[string]any{
 		"queue":        dial.Queue,
@@ -541,9 +541,9 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 }
 
 func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial) error {
-	r.engine.mu.Lock()
 	conf := r.engine.getOrCreateConference(r.call.AccountSID, dial.Conference)
 
+	r.state.mu.Lock()
 	// Add participant
 	conf.Participants = append(conf.Participants, r.call.SID)
 	conf.Timeline = append(conf.Timeline, model.NewEvent(
@@ -563,7 +563,7 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 	}
 
 	r.call.CurrentEndpoint = "conference:" + dial.Conference
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 
 	r.addEvent("joined.conference", map[string]any{
 		"conference": dial.Conference,
@@ -575,9 +575,9 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-r.hangupCh:
-		r.engine.mu.Lock()
+		r.state.mu.Lock()
 		r.removeFromConference(conf)
-		r.engine.mu.Unlock()
+		r.state.mu.Unlock()
 		return nil
 	}
 }
@@ -608,7 +608,6 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial) er
 }
 
 func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue, currentTwimlDocumentURL string) error {
-	r.engine.mu.Lock()
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, enqueue.Name)
 	queueSID := queue.SID
 
@@ -618,7 +617,6 @@ func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue,
 		// Get the first waiting agent (FIFO)
 		targetCallSID = queue.Members[0]
 	}
-	r.engine.mu.Unlock()
 
 	// Two scenarios:
 	// 1. If there's a waiting agent, bridge with them immediately
@@ -643,9 +641,9 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 	})
 
 	// Get the agent call's runner to dequeue it
-	r.engine.mu.Lock()
-	agentRunner := r.engine.runners[agentCallSID]
-	r.engine.mu.Unlock()
+	r.state.mu.Lock()
+	agentRunner := r.state.runners[agentCallSID]
+	r.state.mu.Unlock()
 
 	// Signal the agent call to dequeue with "bridged" result
 	if agentRunner != nil {
@@ -683,9 +681,9 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, queueSID model.SID, currentTwimlDocumentURL string) error {
 	startTime := r.clock.Now()
 
-	r.engine.mu.Lock()
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, enqueue.Name)
 
+	r.state.mu.Lock()
 	// Add this call to the queue
 	queue.Members = append(queue.Members, r.call.SID)
 	queue.Timeline = append(queue.Timeline, model.NewEvent(
@@ -695,7 +693,7 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 	))
 
 	r.call.CurrentEndpoint = "queue:" + enqueue.Name
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 
 	r.addEvent("enqueued", map[string]any{
 		"queue":     enqueue.Name,
@@ -720,12 +718,12 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 	}
 
 	// Calculate time in queue
-	r.engine.mu.Lock()
+	r.state.mu.Lock()
 	endTime := r.clock.Now()
 	queueTime := int(endTime.Sub(startTime).Seconds())
 	r.removeFromQueue(queue)
 	r.call.CurrentEndpoint = ""
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 
 	r.addEvent("dequeued", map[string]any{
 		"queue":        enqueue.Name,
@@ -768,9 +766,9 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, cu
 		"timeout":    record.TimeoutInSeconds.Seconds(),
 	})
 
-	r.engine.mu.Lock()
+	r.state.mu.Lock()
 	r.call.CurrentEndpoint = "recording"
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 
 	// Simulate beep if enabled
 	if record.PlayBeep {
@@ -801,9 +799,9 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, cu
 		r.addEvent("record.max_length", map[string]any{})
 	}
 
-	r.engine.mu.Lock()
+	r.state.mu.Lock()
 	r.call.CurrentEndpoint = ""
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 
 	// Generate a fake recording SID
 	recordingSID := model.NewRecordingSID()
@@ -832,9 +830,9 @@ func (r *CallRunner) executeHangup() error {
 	r.addEvent("twiml.hangup", map[string]any{})
 	r.updateStatus(model.CallCompleted)
 	now := r.clock.Now()
-	r.engine.mu.Lock()
+	r.state.mu.Lock()
 	r.call.EndedAt = &now
-	r.engine.mu.Unlock()
+	r.state.mu.Unlock()
 	return ErrCallHungup // Signal to stop execution
 }
 
@@ -855,14 +853,14 @@ func (r *CallRunner) SendDigits(digits string) {
 }
 
 func (r *CallRunner) updateStatus(status model.CallStatus) {
-	r.engine.mu.Lock()
-	defer r.engine.mu.Unlock()
-	r.engine.updateCallStatus(r.call, status)
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+	r.engine.updateCallStatusLocked(r.state, r.call, status)
 }
 
 func (r *CallRunner) addEvent(eventType string, detail map[string]any) {
-	r.engine.mu.Lock()
-	defer r.engine.mu.Unlock()
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
 	r.call.Timeline = append(r.call.Timeline, model.NewEvent(
 		r.clock.Now(),
 		eventType,
@@ -871,8 +869,8 @@ func (r *CallRunner) addEvent(eventType string, detail map[string]any) {
 }
 
 func (r *CallRunner) buildCallForm() url.Values {
-	r.engine.mu.RLock()
-	defer r.engine.mu.RUnlock()
+	r.state.mu.RLock()
+	defer r.state.mu.RUnlock()
 
 	form := url.Values{}
 	form.Set("CallSid", string(r.call.SID))

@@ -198,8 +198,8 @@ func (c *Client) Snapshot() (*engine.StateSnapshot, error) {
 	return c.engine.Snapshot(model.SID(c.subaccountSID))
 }
 
-func (c *Client) SetClock(clock engine.Clock) {
-	c.engine.SetClockForAccount(model.SID(c.subaccountSID), clock)
+func (c *Client) SetClock(clock engine.Clock) error {
+	return c.engine.SetClockForAccount(model.SID(c.subaccountSID), clock)
 }
 
 func (c *Client) AdvanceClock(d time.Duration) error {
