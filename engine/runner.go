@@ -223,7 +223,7 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTw
 	case *twiml.Record:
 		return r.executeRecord(ctx, n, currentTwimlDocumentURL, terminated)
 	case *twiml.Hangup:
-		return r.executeHangup()
+		return r.executeHangup(false)
 	default:
 		log.Printf("Unknown TwiML node type: %T", node)
 	}
@@ -231,6 +231,7 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTw
 }
 
 func (r *CallRunner) executeSay(say *twiml.Say) error {
+	r.trackTwiML(say)
 	r.addEvent("twiml.say", map[string]any{
 		"text":     say.Text,
 		"voice":    say.Voice,
@@ -240,6 +241,7 @@ func (r *CallRunner) executeSay(say *twiml.Say) error {
 }
 
 func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
+	r.trackTwiML(play)
 	// Log the play attempt
 	r.addEvent("twiml.play", map[string]any{
 		"url": play.URL,
@@ -276,6 +278,7 @@ func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
 }
 
 func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause) error {
+	r.trackTwiML(pause)
 	r.addEvent("twiml.pause", map[string]any{
 		"length": pause.Length.Seconds(),
 	})
@@ -291,6 +294,7 @@ func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause) error
 }
 
 func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, currentTwimlDocumentURL string, terminated *bool) error {
+	r.trackTwiML(gather)
 	r.addEvent("twiml.gather", map[string]any{
 		"input":      gather.Input,
 		"timeout":    gather.Timeout.Seconds(),
@@ -360,6 +364,7 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 }
 
 func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentTwimlDocumentURL string) error {
+	r.trackTwiML(dial)
 	r.addEvent("twiml.dial", map[string]any{
 		"number":     dial.Number,
 		"client":     dial.Client,
@@ -608,6 +613,7 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial) er
 }
 
 func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue, currentTwimlDocumentURL string) error {
+	r.trackTwiML(enqueue)
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, enqueue.Name)
 	queueSID := queue.SID
 
@@ -741,6 +747,7 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 }
 
 func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redirect) error {
+	r.trackTwiML(redirect)
 	r.addEvent("twiml.redirect", map[string]any{
 		"url":    redirect.URL,
 		"method": redirect.Method,
@@ -756,6 +763,7 @@ func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redire
 }
 
 func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, currentTwimlDocumentURL string, terminated *bool) error {
+	r.trackTwiML(record)
 	startTime := r.clock.Now()
 
 	r.addEvent("twiml.record", map[string]any{
@@ -826,7 +834,10 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, cu
 	return nil
 }
 
-func (r *CallRunner) executeHangup() error {
+func (r *CallRunner) executeHangup(implicit bool) error {
+	if !implicit {
+		r.trackTwiML(&twiml.Hangup{})
+	}
 	r.addEvent("twiml.hangup", map[string]any{})
 	r.updateStatus(model.CallCompleted)
 	now := r.clock.Now()
@@ -866,6 +877,12 @@ func (r *CallRunner) addEvent(eventType string, detail map[string]any) {
 		eventType,
 		detail,
 	))
+}
+
+func (r *CallRunner) trackTwiML(verb any) {
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+	r.call.ExecutedTwiML = append(r.call.ExecutedTwiML, verb)
 }
 
 func (r *CallRunner) buildCallForm() url.Values {
@@ -916,7 +933,7 @@ func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string
 			"message": "Action callback returned no TwiML instructions, hanging up call",
 			"url":     resolvedURL,
 		})
-		return r.executeHangup()
+		return r.executeHangup(true)
 	}
 
 	return r.executeTwiML(ctx, resp, resolvedURL)

@@ -58,6 +58,7 @@ type Call struct {
 	ParentCallSID        *SID              `json:"parent_call_sid,omitempty"`
 	CurrentEndpoint      string            `json:"current_endpoint"` // "queue:{name}", "conference:{name}", "gather", ""
 	Timeline             []Event           `json:"timeline"`
+	ExecutedTwiML        []any             `json:"executed_twiml,omitempty"` // Track executed TwiML verbs for testing
 	Variables            map[string]string `json:"variables"`
 	Url                  string            `json:"url"`
 	StatusCallback       string            `json:"status_callback,omitempty"`
