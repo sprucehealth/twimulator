@@ -15,6 +15,9 @@ import (
 // ErrCallHungup is returned when a Hangup verb is executed
 var ErrCallHungup = errors.New("call hungup via Hangup verb")
 
+// ErrURLUpdated is returned when the call URL is updated during execution
+var ErrURLUpdated = errors.New("call URL updated")
+
 // CallRunner executes TwiML for a call
 type CallRunner struct {
 	call    *model.Call
@@ -24,30 +27,32 @@ type CallRunner struct {
 	timeout time.Duration
 
 	// State for gather
-	gatherCh  chan string
-	hangupCh  chan struct{}
-	answerCh  chan struct{}
-	busyCh    chan struct{}
-	failedCh  chan struct{}
-	dequeueCh chan string // for explicit dequeue with result
-	done      chan struct{}
+	gatherCh    chan string
+	hangupCh    chan struct{}
+	answerCh    chan struct{}
+	busyCh      chan struct{}
+	failedCh    chan struct{}
+	dequeueCh   chan string // for explicit dequeue with result
+	urlUpdateCh chan string // signals URL update with new URL
+	done        chan struct{}
 }
 
 // NewCallRunner creates a new call runner
 func NewCallRunner(call *model.Call, state *subAccountState, engine *EngineImpl, timeout time.Duration) *CallRunner {
 	return &CallRunner{
-		call:      call,
-		clock:     state.clock,
-		state:     state,
-		engine:    engine,
-		timeout:   timeout,
-		gatherCh:  make(chan string, 1),
-		hangupCh:  make(chan struct{}, 1),
-		answerCh:  make(chan struct{}, 1),
-		busyCh:    make(chan struct{}, 1),
-		failedCh:  make(chan struct{}, 1),
-		dequeueCh: make(chan string, 1),
-		done:      make(chan struct{}),
+		call:        call,
+		clock:       state.clock,
+		state:       state,
+		engine:      engine,
+		timeout:     timeout,
+		gatherCh:    make(chan string, 1),
+		hangupCh:    make(chan struct{}, 1),
+		answerCh:    make(chan struct{}, 1),
+		busyCh:      make(chan struct{}, 1),
+		failedCh:    make(chan struct{}, 1),
+		dequeueCh:   make(chan string, 1),
+		urlUpdateCh: make(chan string, 1),
+		done:        make(chan struct{}),
 	}
 }
 
@@ -93,46 +98,65 @@ func (r *CallRunner) answer(ctx context.Context) {
 		r.call.AnsweredAt = &now
 		r.state.mu.Unlock()
 	}
-	if r.call.Direction != model.Inbound {
+	if r.call.Direction != model.Inbound && r.call.Status != model.CallInProgress {
 		// an outbound call is answered first, and then it's url is fetched
 		answerNow()
 	}
-	// Fetch initial TwiML
-	twimlResp, err := r.fetchTwiML(ctx, r.call.Url, url.Values{})
-	if err != nil {
-		log.Printf("Failed to fetch Url for call %s: %v", r.call.SID, err)
-		r.updateStatus(model.CallFailed)
-		return
-	}
-	if r.call.Direction == model.Inbound {
-		// backend answers the inbound call when twiml is fetched
-		answerNow()
-	}
 
-	// Execute TwiML
-	if err := r.executeTwiML(ctx, twimlResp, r.call.Url); err != nil {
-		// Check if this is a normal hangup or an actual error
-		if errors.Is(err, ErrCallHungup) {
-			// Normal hangup via <Hangup/> verb - call already completed by executeHangup
+	// Main execution loop - allows for URL updates during execution
+	for {
+		// Get current URL from call state
+		r.state.mu.Lock()
+		currentURL := r.call.Url
+		r.state.mu.Unlock()
+
+		// Fetch TwiML
+		twimlResp, err := r.fetchTwiML(ctx, currentURL, url.Values{})
+		if err != nil {
+			log.Printf("Failed to fetch Url for call %s: %v", r.call.SID, err)
+			r.updateStatus(model.CallFailed)
 			return
 		}
-		// Actual error - mark call as failed
-		log.Printf("TwiML execution error for call %s: %v", r.call.SID, err)
-		r.updateStatus(model.CallFailed)
-		return
-	}
+		if r.call.Direction == model.Inbound && r.call.Status != model.CallInProgress {
+			// backend answers the inbound call when twiml is fetched
+			answerNow()
+		}
 
-	// TwiML execution completed, wait for hangup
-	select {
-	case <-ctx.Done():
-		return
-	case <-r.hangupCh:
-		r.updateStatus(model.CallCompleted)
-		now := r.clock.Now()
-		r.state.mu.Lock()
-		r.call.EndedAt = &now
-		r.state.mu.Unlock()
-		return
+		// Execute TwiML
+		err = r.executeTwiML(ctx, twimlResp, currentURL)
+		if err != nil {
+			// Check if this is a normal hangup or an actual error
+			if errors.Is(err, ErrCallHungup) {
+				// Normal hangup via <Hangup/> verb - call already completed by executeHangup
+				return
+			}
+			// Check if URL was updated - if so, loop to fetch new TwiML
+			if errors.Is(err, ErrURLUpdated) {
+				r.addEvent("call.url_updated", map[string]any{"message": "Fetching new TwiML from updated URL"})
+				continue
+			}
+			// Actual error - mark call as failed
+			log.Printf("TwiML execution error for call %s: %v", r.call.SID, err)
+			r.updateStatus(model.CallFailed)
+			return
+		}
+
+		// TwiML execution completed, wait for hangup or URL update
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.hangupCh:
+			r.updateStatus(model.CallCompleted)
+			now := r.clock.Now()
+			r.state.mu.Lock()
+			r.call.EndedAt = &now
+			r.state.mu.Unlock()
+			return
+		case <-r.urlUpdateCh:
+			// URL updated after TwiML completion, fetch new TwiML
+			r.addEvent("call.url_updated", map[string]any{"message": "Fetching new TwiML from updated URL"})
+			continue
+		}
 	}
 }
 
@@ -150,7 +174,7 @@ func (r *CallRunner) fetchTwiML(ctx context.Context, targetURL string, form url.
 	})
 
 	// Make request
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, r.engine.timeout)
 	defer cancel()
 
 	status, body, headers, err := r.engine.webhook.POST(reqCtx, targetURL, callForm)
@@ -248,7 +272,7 @@ func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
 	})
 
 	// Fetch the media URL to ensure it's accessible
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
 	status, _, _, err := r.engine.webhook.GET(reqCtx, play.URL)
@@ -288,6 +312,10 @@ func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause) error
 		return ctx.Err()
 	case <-r.hangupCh:
 		return nil
+	case <-r.urlUpdateCh:
+		// URL updated, skip through pause
+		r.addEvent("pause.interrupted", map[string]any{"reason": "url_updated"})
+		return ErrURLUpdated
 	case <-r.clock.After(pause.Length):
 		return nil
 	}
@@ -337,11 +365,16 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 
 	// Wait for digits or timeout
 	var digits string
+	var urlUpdated bool
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-r.hangupCh:
 		return nil
+	case <-r.urlUpdateCh:
+		// URL updated, skip through gather
+		r.addEvent("gather.interrupted", map[string]any{"reason": "url_updated"})
+		urlUpdated = true
 	case digits = <-r.gatherCh:
 		// Got digits
 		r.addEvent("gather.digits", map[string]any{"digits": digits})
@@ -350,6 +383,12 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 		digits = ""
 		r.addEvent("gather.timeout", map[string]any{})
 	}
+
+	// If URL was updated, skip action callback entirely
+	if urlUpdated {
+		return ErrURLUpdated
+	}
+
 	if digits == "" {
 		return nil
 	}
@@ -363,7 +402,7 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 	form := url.Values{}
 	form.Set("Digits", digits)
 
-	return r.executeActionCallback(ctx, gather.Action, form, currentTwimlDocumentURL)
+	return r.executeActionCallback(ctx, gather.Action, form, currentTwimlDocumentURL, false)
 }
 
 func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentTwimlDocumentURL string) error {
@@ -478,7 +517,7 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", targetQueueTime))
 
-	return r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL)
+	return r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL, false)
 }
 
 // waitInDialQueue waits in queue when no members are available
@@ -506,6 +545,7 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	// Wait for dequeue, timeout, or hangup
 	dialStatus := ""
 	queueResult := ""
+	urlUpdated := false
 	select {
 	case <-ctx.Done():
 		dialStatus = "canceled"
@@ -513,6 +553,11 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	case <-r.hangupCh:
 		dialStatus = "canceled"
 		queueResult = "hangup"
+	case <-r.urlUpdateCh:
+		dialStatus = "canceled"
+		queueResult = "url-updated"
+		urlUpdated = true
+		r.addEvent("dial.queue.interrupted", map[string]any{"reason": "url_updated"})
 	case result := <-r.dequeueCh:
 		dialStatus = "completed"
 		queueResult = result
@@ -537,6 +582,11 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 		"queue_time":   queueTime,
 	})
 
+	// If URL was updated, skip action callback entirely
+	if urlUpdated {
+		return ErrURLUpdated
+	}
+
 	// Call action callback with dial results
 	form := url.Values{}
 	form.Set("DialCallStatus", dialStatus)
@@ -545,7 +595,7 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
 
-	return r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL)
+	return r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL, false)
 }
 
 func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial) error {
@@ -683,7 +733,7 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
 
-	return r.executeActionCallback(ctx, enqueue.Action, form, currentTwimlDocumentURL)
+	return r.executeActionCallback(ctx, enqueue.Action, form, currentTwimlDocumentURL, false)
 }
 
 // waitInEnqueue waits in queue when no agents are available
@@ -716,12 +766,18 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 	// 1. Another call dials the queue and bridges
 	// 2. Caller hangs up
 	// 3. Context is cancelled
+	// 4. URL is updated
 	queueResult := ""
+	urlUpdated := false
 	select {
 	case <-ctx.Done():
 		queueResult = "system-shutdown"
 	case <-r.hangupCh:
 		queueResult = "hangup"
+	case <-r.urlUpdateCh:
+		queueResult = "url-updated"
+		urlUpdated = true
+		r.addEvent("enqueue.interrupted", map[string]any{"reason": "url_updated"})
 	case result := <-r.dequeueCh:
 		queueResult = result
 	}
@@ -739,14 +795,19 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 		"queue_result": queueResult,
 		"queue_time":   queueTime,
 	})
-
 	// Call action callback with queue results
 	form := url.Values{}
 	form.Set("QueueResult", queueResult)
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
 
-	return r.executeActionCallback(ctx, enqueue.Action, form, currentTwimlDocumentURL)
+	// If URL was updated, skip action callback entirely
+	if urlUpdated {
+		_ = r.executeActionCallback(ctx, enqueue.Action, form, currentTwimlDocumentURL, true)
+		return ErrURLUpdated
+	}
+
+	return r.executeActionCallback(ctx, enqueue.Action, form, currentTwimlDocumentURL, false)
 }
 
 func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redirect) error {
@@ -830,7 +891,7 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, cu
 	form.Set("RecordingStatus", recordingStatus)
 	form.Set("RecordingDuration", fmt.Sprintf("%.0f", recordingDuration.Seconds()))
 
-	if err := r.executeActionCallback(ctx, record.Action, form, currentTwimlDocumentURL); err != nil {
+	if err := r.executeActionCallback(ctx, record.Action, form, currentTwimlDocumentURL, false); err != nil {
 		return err
 	}
 	*terminated = true
@@ -862,6 +923,14 @@ func (r *CallRunner) Hangup() {
 func (r *CallRunner) SendDigits(digits string) {
 	select {
 	case r.gatherCh <- digits:
+	default:
+	}
+}
+
+// UpdateURL signals the runner to interrupt current execution and fetch new TwiML from the updated URL
+func (r *CallRunner) UpdateURL(newURL string) {
+	select {
+	case r.urlUpdateCh <- newURL:
 	default:
 	}
 }
@@ -910,7 +979,7 @@ func (r *CallRunner) buildCallForm() url.Values {
 }
 
 // executeActionCallback calls an action URL with the provided form parameters
-func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string, form url.Values, currentTwimlDocumentURL string) error {
+func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string, form url.Values, currentTwimlDocumentURL string, skipTwimlExecution bool) error {
 	if actionURL == "" {
 		return nil
 	}
@@ -930,6 +999,9 @@ func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string
 		return err
 	}
 
+	if skipTwimlExecution {
+		return nil
+	}
 	// If the action callback returns no TwiML instructions, hangup the call
 	if len(resp.Children) == 0 {
 		r.addEvent("action.empty_response", map[string]any{

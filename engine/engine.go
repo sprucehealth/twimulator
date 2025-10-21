@@ -105,6 +105,7 @@ type EngineImpl struct {
 	// Global mutex ONLY for subaccount map mutations
 	subAccountsMu sync.RWMutex
 	subAccounts   map[model.SID]*subAccountState
+	timeout       time.Duration
 
 	// Immutable or globally-shared state (no lock needed after init)
 	defaultClock Clock
@@ -174,9 +175,11 @@ func WithWebhookClient(client httpstub.WebhookClient) EngineOption {
 func NewEngine(opts ...EngineOption) *EngineImpl {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	timeout := 40 * time.Second
 	e := &EngineImpl{
+		timeout:      timeout,
 		defaultClock: NewManualClock(time.Time{}), // default to manual
-		webhook:      httpstub.NewDefaultWebhookClient(10 * time.Second),
+		webhook:      httpstub.NewDefaultWebhookClient(timeout),
 		apiVersion:   "2010-04-01",
 		subAccounts:  make(map[model.SID]*subAccountState),
 		ctx:          ctx,
@@ -903,10 +906,12 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 	now := state.clock.Now()
 	updatedFields := make(map[string]any)
 	needHangup := false
+	urlUpdated := false
 
 	if params.Url != nil {
 		call.Url = *params.Url
 		updatedFields["url"] = *params.Url
+		urlUpdated = true
 	}
 	if params.StatusCallback != nil {
 		call.StatusCallback = *params.StatusCallback
@@ -937,6 +942,11 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 
 	if needHangup && runner != nil {
 		runner.Hangup()
+	}
+
+	// If URL was updated, signal the runner to fetch and execute new TwiML
+	if urlUpdated && runner != nil && !needHangup {
+		runner.UpdateURL(*params.Url)
 	}
 
 	return resp, nil
@@ -1848,7 +1858,8 @@ func (e *EngineImpl) updateCallStatusLocked(state *subAccountState, call *model.
 
 	// Trigger status callback if configured and user is interested in this event
 	if call.StatusCallback != "" && e.shouldSendStatusCallback(call, newStatus) {
-		e.sendStatusCallback(state, call)
+		// Note: this must stay asynchronus to avoid deadlocks
+		go e.sendStatusCallback(state, call)
 	}
 }
 
@@ -1874,7 +1885,7 @@ func (e *EngineImpl) shouldSendStatusCallback(call *model.Call, status model.Cal
 func (e *EngineImpl) sendStatusCallback(state *subAccountState, call *model.Call) {
 	form := e.buildCallbackForm(state.clock, call)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
 	defer cancel()
 
 	status, body, headers, err := e.webhook.POST(ctx, call.StatusCallback, form)

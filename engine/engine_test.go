@@ -730,6 +730,218 @@ func TestUpdateCall(t *testing.T) {
 	}
 }
 
+func TestUpdateCallURLDuringExecution(t *testing.T) {
+	// Track which URLs were called
+	callCount := make(map[string]int)
+
+	// Create a mock webhook client
+	mock := httpstub.NewMockWebhookClient()
+	mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
+		callCount[targetURL]++
+
+		// Initial URL with a long pause
+		if targetURL == "http://test/initial" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Pause length="10"/>
+  <Say>This should not be said</Say>
+</Response>`), make(http.Header), nil
+		}
+
+		// Updated URL
+		if targetURL == "http://test/updated" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>New TwiML executed</Say>
+</Response>`), make(http.Header), nil
+		}
+
+		return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
+	}
+
+	// Create engine with manual clock and mock webhook
+	e := engine.NewEngine(
+		engine.WithManualClock(),
+		engine.WithWebhookClient(mock),
+	)
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234", "+5678")
+
+	// Create call with initial URL
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/initial"))
+
+	// Answer the call
+	time.Sleep(10 * time.Millisecond)
+	err := e.AnswerCall(call.AccountSID, call.SID)
+	if err != nil {
+		t.Fatalf("answer call failed: %v", err)
+	}
+
+	// Advance time a bit to let the call start executing
+	e.Advance(1 * time.Second)
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify initial URL was called
+	if callCount["http://test/initial"] != 1 {
+		t.Fatalf("expected initial URL to be called once, got %d", callCount["http://test/initial"])
+	}
+
+	// Update the URL while the pause is still running
+	updateParams := (&twilioopenapi.UpdateCallParams{}).
+		SetUrl("http://test/updated").
+		SetPathAccountSid(string(subAccount.SID))
+
+	_, err = e.UpdateCall(string(call.SID), updateParams)
+	if err != nil {
+		t.Fatalf("update call failed: %v", err)
+	}
+
+	// Advance time to allow new TwiML to be fetched and executed
+	e.Advance(1 * time.Second)
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify updated URL was called
+	if callCount["http://test/updated"] != 1 {
+		t.Fatalf("expected updated URL to be called once, got %d", callCount["http://test/updated"])
+	}
+
+	// Check the call state
+	got, ok := e.GetCallState(subAccount.SID, call.SID)
+	if !ok {
+		t.Fatalf("call %s not found after update", call.SID)
+	}
+	if got.Url != "http://test/updated" {
+		t.Fatalf("expected URL updated to http://test/updated, got %s", got.Url)
+	}
+
+	// Verify that the pause was interrupted (event should be logged)
+	foundInterruption := false
+	for _, event := range got.Timeline {
+		if event.Type == "pause.interrupted" {
+			foundInterruption = true
+			break
+		}
+	}
+	if !foundInterruption {
+		t.Fatal("expected pause.interrupted event in timeline")
+	}
+}
+
+func TestUpdateCallURLDuringGather(t *testing.T) {
+	// Track which URLs were called
+	callCount := make(map[string]int)
+
+	// Create a mock webhook client
+	mock := httpstub.NewMockWebhookClient()
+	mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
+		callCount[targetURL]++
+
+		// Initial URL with a gather
+		if targetURL == "http://test/initial" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather action="http://test/gather-action" timeout="10">
+    <Say>Enter digits</Say>
+  </Gather>
+</Response>`), make(http.Header), nil
+		}
+
+		// Gather action URL - this should be invoked but not processed
+		if targetURL == "http://test/gather-action" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>This should not be executed</Say>
+</Response>`), make(http.Header), nil
+		}
+
+		// Updated URL
+		if targetURL == "http://test/updated" {
+			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>New TwiML executed</Say>
+</Response>`), make(http.Header), nil
+		}
+
+		return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
+	}
+
+	// Create engine with manual clock and mock webhook
+	e := engine.NewEngine(
+		engine.WithManualClock(),
+		engine.WithWebhookClient(mock),
+	)
+	defer e.Close()
+
+	subAccount := createTestSubAccount(t, e, "Test Account")
+	mustProvisionNumbers(t, e, subAccount.SID, "+1234", "+5678")
+
+	// Create call with initial URL
+	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/initial"))
+
+	// Answer the call
+	time.Sleep(10 * time.Millisecond)
+	err := e.AnswerCall(call.AccountSID, call.SID)
+	if err != nil {
+		t.Fatalf("answer call failed: %v", err)
+	}
+
+	// Advance time a bit to let the call start gathering
+	e.Advance(1 * time.Second)
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify initial URL was called
+	if callCount["http://test/initial"] != 1 {
+		t.Fatalf("expected initial URL to be called once, got %d", callCount["http://test/initial"])
+	}
+
+	// Update the URL while gather is waiting for input
+	updateParams := (&twilioopenapi.UpdateCallParams{}).
+		SetUrl("http://test/updated").
+		SetPathAccountSid(string(subAccount.SID))
+
+	_, err = e.UpdateCall(string(call.SID), updateParams)
+	if err != nil {
+		t.Fatalf("update call failed: %v", err)
+	}
+
+	// Advance time to allow new TwiML to be fetched and executed
+	e.Advance(1 * time.Second)
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify gather action was called (but not processed)
+	if callCount["http://test/gather-action"] != 0 {
+		t.Fatalf("gather action URL invoked when it shouldn't, got %d", callCount["http://test/gather-action"])
+	}
+
+	// Verify updated URL was called
+	if callCount["http://test/updated"] != 1 {
+		t.Fatalf("expected updated URL to be called once, got %d", callCount["http://test/updated"])
+	}
+
+	// Check the call state
+	got, ok := e.GetCallState(subAccount.SID, call.SID)
+	if !ok {
+		t.Fatalf("call %s not found after update", call.SID)
+	}
+	if got.Url != "http://test/updated" {
+		t.Fatalf("expected URL updated to http://test/updated, got %s", got.Url)
+	}
+
+	// Verify that the gather was interrupted (event should be logged)
+	foundInterruption := false
+	for _, event := range got.Timeline {
+		if event.Type == "gather.interrupted" {
+			foundInterruption = true
+			break
+		}
+	}
+	if !foundInterruption {
+		t.Fatal("expected gather.interrupted event in timeline")
+	}
+}
+
 func TestListIncomingPhoneNumber(t *testing.T) {
 	e := engine.NewEngine(engine.WithManualClock())
 	defer e.Close()
