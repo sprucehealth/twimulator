@@ -18,57 +18,109 @@ import (
 	"twimulator/model"
 )
 
+type subAccountInfo struct {
+	SID          model.SID
+	FriendlyName string
+	Account      *model.SubAccount
+}
+
 func main() {
 	// Create engine with auto clock for real-time operation
 	e := engine.NewEngine(engine.WithAutoClock())
 	defer e.Close()
 
-	// Create a subaccount for our demo
-	accountParams := (&openapi.CreateAccountParams{}).SetFriendlyName("Demo SubAccount")
-	account, err := e.CreateAccount(accountParams)
-	if err != nil {
-		log.Fatalf("Failed to create subaccount: %v", err)
-	}
-	if account.Sid == nil {
-		log.Fatalf("CreateAccount returned no SID")
-	}
-	subAccountSID := model.SID(*account.Sid)
-	snap, err := e.Snapshot(subAccountSID)
-	if err != nil {
-		log.Fatalf("Failed to get snapshot: %v", err)
-	}
-	subAccount, ok := snap.SubAccounts[subAccountSID]
-	if !ok {
-		log.Fatalf("Subaccount %s not found after creation", subAccountSID)
-	}
+	// Create two subaccounts for our demo
+	subAccounts := make([]subAccountInfo, 2)
 
-	provisionNumber := func(phone string) {
-		params := (&openapi.CreateIncomingPhoneNumberParams{}).
-			SetPathAccountSid(string(subAccountSID)).
-			SetPhoneNumber(phone)
-		if _, err := e.CreateIncomingPhoneNumber(params); err != nil {
-			log.Fatalf("Failed to provision number %s: %v", phone, err)
+	for i := 0; i < 2; i++ {
+		accountName := fmt.Sprintf("Demo SubAccount %d", i+1)
+		accountParams := (&openapi.CreateAccountParams{}).SetFriendlyName(accountName)
+		account, err := e.CreateAccount(accountParams)
+		if err != nil {
+			log.Fatalf("Failed to create subaccount %d: %v", i+1, err)
 		}
+		if account.Sid == nil {
+			log.Fatalf("CreateAccount returned no SID for account %d", i+1)
+		}
+		subAccountSID := model.SID(*account.Sid)
+		snap, err := e.Snapshot(subAccountSID)
+		if err != nil {
+			log.Fatalf("Failed to get snapshot for account %d: %v", i+1, err)
+		}
+		subAccount, ok := snap.SubAccounts[subAccountSID]
+		if !ok {
+			log.Fatalf("Subaccount %s not found after creation", subAccountSID)
+		}
+
+		// Provision phone numbers for this subaccount
+		baseNumber := 1000 + (i * 100)
+		provisionNumber := func(phone string) {
+			params := (&openapi.CreateIncomingPhoneNumberParams{}).
+				SetPathAccountSid(string(subAccountSID)).
+				SetPhoneNumber(phone)
+			if _, err := e.CreateIncomingPhoneNumber(params); err != nil {
+				log.Fatalf("Failed to provision number %s: %v", phone, err)
+			}
+		}
+
+		for j := 1; j <= 6; j++ {
+			phone := fmt.Sprintf("+15551%06d", baseNumber+j)
+			provisionNumber(phone)
+		}
+
+		subAccounts[i] = subAccountInfo{
+			SID:          subAccountSID,
+			FriendlyName: accountName,
+			Account:      subAccount,
+		}
+		log.Printf("Created subaccount %d: %s (%s)", i+1, subAccount.FriendlyName, subAccount.SID)
 	}
 
-	for _, phone := range []string{
-		"+15551234001",
-		"+15551234002",
-		"+15551234003",
-		"+15551234004",
-		"+15551234005",
-		"+15551234099",
-	} {
-		provisionNumber(phone)
-	}
-	log.Printf("Created subaccount: %s (%s)", subAccount.FriendlyName, subAccount.SID)
-
-	// Start a test HTTP server that serves TwiML
-	mux := http.NewServeMux()
-
-	// Create the test server first so we can reference its URL
-	testSrv := httptest.NewServer(mux)
+	// Start test HTTP server (shared by both subaccounts)
+	testSrv := createTwiMLServer()
 	defer testSrv.Close()
+	log.Printf("Test TwiML server running at %s", testSrv.URL)
+
+	// Start console server
+	cs, err := console.NewConsoleServer(e, ":8089")
+	if err != nil {
+		log.Fatalf("Failed to create console server: %v", err)
+	}
+
+	go func() {
+		if err := cs.Start(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Console server error: %v", err)
+		}
+	}()
+
+	// Give the server a moment to start
+	time.Sleep(100 * time.Millisecond)
+
+	log.Println("=== Twimulator Demo ===")
+	log.Println("Console UI: http://localhost:8089")
+	log.Println("")
+	log.Println("Creating demo scenarios for both subaccounts...")
+	log.Println("")
+
+	// Run scenarios for both subaccounts
+	for i := 0; i < 2; i++ {
+		accountIdx := i
+		go runScenario(e, subAccounts[accountIdx], testSrv, accountIdx+1)
+	}
+
+	// Wait for interrupt signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+
+	log.Println("\nShutting down...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cs.Stop(ctx)
+}
+
+func createTwiMLServer() *httptest.Server {
+	mux := http.NewServeMux()
 
 	// Inbound call handler - enqueues caller
 	mux.HandleFunc("/voice/inbound", func(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +155,9 @@ func main() {
 </Response>`)
 	})
 
-	// Gather demo handler
+	testSrv := httptest.NewServer(mux)
+
+	// Gather demo handler (needs server URL)
 	mux.HandleFunc("/voice/gather", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Gather call from %s", r.FormValue("From"))
 		w.Header().Set("Content-Type", "text/xml")
@@ -175,49 +229,35 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	log.Printf("Test TwiML server running at %s", testSrv.URL)
+	return testSrv
+}
 
-	// Start console server
-	cs, err := console.NewConsoleServer(e, ":8089")
-	if err != nil {
-		log.Fatalf("Failed to create console server: %v", err)
-	}
+func runScenario(e *engine.EngineImpl, account subAccountInfo, testSrv *httptest.Server, accountNum int) {
+	prefix := fmt.Sprintf("[Account %d]", accountNum)
 
-	go func() {
-		if err := cs.Start(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Console server error: %v", err)
-		}
-	}()
-
-	// Give the server a moment to start
-	time.Sleep(100 * time.Millisecond)
-
-	log.Println("=== Twimulator Demo ===")
-	log.Println("Console UI: http://localhost:8089")
-	log.Println("")
-	log.Println("Creating demo scenario...")
-	log.Println("")
+	// Stagger start times for each account
+	time.Sleep(time.Duration(accountNum-1) * 500 * time.Millisecond)
 
 	createCall := func(params *openapi.CreateCallParams) *model.Call {
-		params.SetPathAccountSid(string(subAccount.SID))
+		params.SetPathAccountSid(string(account.SID))
 		apiCall, err := e.CreateCall(params)
 		if err != nil {
-			log.Fatalf("Failed to create call: %v", err)
+			log.Fatalf("%s Failed to create call: %v", prefix, err)
 		}
 		if apiCall.Sid == nil {
-			log.Fatalf("CreateCall did not return SID")
+			log.Fatalf("%s CreateCall did not return SID", prefix)
 		}
 		sid := model.SID(*apiCall.Sid)
-		call, ok := e.GetCallState(subAccount.SID, sid)
+		call, ok := e.GetCallState(account.SID, sid)
 		if !ok {
-			log.Fatalf("Call %s not found after creation", sid)
+			log.Fatalf("%s Call %s not found after creation", prefix, sid)
 		}
 		return call
 	}
 
 	newCallParams := func(from, to, url string) *openapi.CreateCallParams {
 		params := &openapi.CreateCallParams{}
-		params.SetPathAccountSid(string(subAccount.SID))
+		params.SetPathAccountSid(string(account.SID))
 		if from != "" {
 			params.SetFrom(from)
 		}
@@ -228,76 +268,69 @@ func main() {
 		return params
 	}
 
-	// Scenario: Queue and Conference demo
-	go func() {
+	time.Sleep(500 * time.Millisecond)
+
+	log.Printf("%s 1. Creating inbound customer call...", prefix)
+	baseNumber := 1000 + ((accountNum - 1) * 100)
+	params1 := newCallParams(fmt.Sprintf("+15551%06d", baseNumber+1), "+18005551000", testSrv.URL+"/voice/inbound")
+	params1.SetStatusCallback(testSrv.URL + "/voice/status")
+	call1 := createCall(params1)
+	log.Printf("%s    Created call %s", prefix, call1.SID)
+
+	time.Sleep(2 * time.Second)
+	e.AnswerCall(account.SID, call1.SID)
+	log.Printf("%s    Answered call %s", prefix, call1.SID)
+
+	time.Sleep(2 * time.Second)
+	log.Printf("%s 2. Creating agent call to handle queue...", prefix)
+	call2 := createCall(newCallParams(fmt.Sprintf("+15551%06d", baseNumber+2), "+18005551001", testSrv.URL+"/voice/agent"))
+	log.Printf("%s    Created call %s", prefix, call2.SID)
+	time.Sleep(3 * time.Second)
+	e.AnswerCall(account.SID, call2.SID)
+	log.Printf("%s    Answered call %s", prefix, call2.SID)
+
+	time.Sleep(2 * time.Second)
+
+	log.Printf("%s 3. Creating conference calls...", prefix)
+	for i := 1; i <= 3; i++ {
+		from := fmt.Sprintf("+15551%06d", baseNumber+2+i)
+		call := createCall(newCallParams(from, "+18005551002", testSrv.URL+"/voice/conference"))
+		log.Printf("%s    Created conference call %s", prefix, call.SID)
 		time.Sleep(500 * time.Millisecond)
+		e.AnswerCall(account.SID, call.SID)
+		log.Printf("%s    Answered call %s", prefix, call.SID)
+	}
 
-		log.Println("1. Creating inbound customer call...")
-		params1 := newCallParams("+15551234001", "+18005551000", testSrv.URL+"/voice/inbound")
-		params1.SetStatusCallback(testSrv.URL + "/voice/status")
-		call1 := createCall(params1)
-		log.Printf("   Created call %s\n", call1.SID)
+	time.Sleep(2 * time.Second)
 
-		time.Sleep(2 * time.Second)
-		e.AnswerCall(subAccount.SID, call1.SID)
-		log.Printf("   Answered call %s\n", call1.SID)
-		time.Sleep(2 * time.Second)
-		log.Println("2. Creating agent call to handle queue...")
-		call2 := createCall(newCallParams("+15551234002", "+18005551001", testSrv.URL+"/voice/agent"))
-		log.Printf("   Created call %s\n", call2.SID)
-		time.Sleep(3 * time.Second)
-		e.AnswerCall(subAccount.SID, call2.SID)
-		log.Printf("   Answered call %s\n", call2.SID)
-		time.Sleep(2 * time.Second)
+	log.Printf("%s 4. Creating gather demo call...", prefix)
+	call3 := createCall(newCallParams(fmt.Sprintf("+15551%06d", baseNumber+6), "+18005551003", testSrv.URL+"/voice/gather"))
+	log.Printf("%s    Created call %s", prefix, call3.SID)
 
-		log.Println("3. Creating conference calls...")
-		for i := 1; i <= 3; i++ {
-			from := fmt.Sprintf("+1555123400%d", i+2)
-			call := createCall(newCallParams(from, "+18005551002", testSrv.URL+"/voice/conference"))
-			log.Printf("   Created conference call %s\n", call.SID)
-			time.Sleep(500 * time.Millisecond)
-			e.AnswerCall(subAccount.SID, call.SID)
-			log.Printf("   Answered call %s\n", call.SID)
-		}
+	time.Sleep(1 * time.Second)
+	e.AnswerCall(account.SID, call3.SID)
+	log.Printf("%s    Answered call %s", prefix, call3.SID)
+	time.Sleep(2 * time.Second)
+	log.Printf("%s 5. Simulating digit press (2 for support)...", prefix)
+	e.SendDigits(account.SID, call3.SID, "2")
+	time.Sleep(2 * time.Second)
 
-		time.Sleep(2 * time.Second)
+	log.Printf("%s 6. Creating voicemail/record demo call...", prefix)
+	call4 := createCall(newCallParams(fmt.Sprintf("+15551%06d", baseNumber+5), "+18005551004", testSrv.URL+"/voice/record"))
+	log.Printf("%s    Created call %s", prefix, call4.SID)
+	time.Sleep(1 * time.Second)
+	e.AnswerCall(account.SID, call4.SID)
+	log.Printf("%s    Answered call %s", prefix, call4.SID)
+	time.Sleep(3 * time.Second)
+	log.Printf("%s    Simulating caller leaving message (waiting for timeout)...", prefix)
+	time.Sleep(6 * time.Second)
+	log.Printf("%s    Recording completed for call %s", prefix, call4.SID)
 
-		log.Println("4. Creating gather demo call...")
-		call3 := createCall(newCallParams("+15551234099", "+18005551003", testSrv.URL+"/voice/gather"))
-		log.Printf("   Created call %s\n", call3.SID)
-
-		time.Sleep(1 * time.Second)
-		e.AnswerCall(subAccount.SID, call3.SID)
-		log.Printf("   Answered call %s\n", call3.SID)
-		time.Sleep(2 * time.Second)
-		log.Println("5. Simulating digit press (2 for support)...")
-		e.SendDigits(subAccount.SID, call3.SID, "2")
-		time.Sleep(2 * time.Second)
-
-		log.Println("6. Creating voicemail/record demo call...")
-		call4 := createCall(newCallParams("+15551234005", "+18005551004", testSrv.URL+"/voice/record"))
-		log.Printf("   Created call %s\n", call4.SID)
-		time.Sleep(1 * time.Second)
-		e.AnswerCall(subAccount.SID, call4.SID)
-		log.Printf("   Answered call %s\n", call4.SID)
-		time.Sleep(3 * time.Second)
-		log.Println("   Simulating caller leaving message (waiting for timeout)...")
-		time.Sleep(6 * time.Second)
-		log.Printf("   Recording completed for call %s\n", call4.SID)
-
+	log.Printf("%s === Scenario complete! ===", prefix)
+	if accountNum == 2 {
 		log.Println("")
-		log.Println("=== Demo scenario complete! ===")
+		log.Println("=== All demo scenarios complete! ===")
 		log.Println("Visit http://localhost:8089 to explore the console")
 		log.Println("Press Ctrl+C to exit")
-	}()
-
-	// Wait for interrupt signal
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	<-sigChan
-
-	log.Println("\nShutting down...")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cs.Stop(ctx)
+	}
 }

@@ -52,7 +52,7 @@ type Engine interface {
 	GetQueue(accountSID model.SID, name string) (*model.Queue, bool)
 	GetConference(accountSID model.SID, name string) (*model.Conference, bool)
 	Snapshot(accountSID model.SID) (*StateSnapshot, error)
-	SnapshotAll() *StateSnapshot
+	SnapshotAll() []*StateSnapshot
 
 	SetClockForAccount(accountSID model.SID, clock Clock) error
 	AdvanceForAccount(accountSID model.SID, d time.Duration) error
@@ -1612,85 +1612,25 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 }
 
 // SnapshotAll returns a deep copy of the current state for all subaccounts
-func (e *EngineImpl) SnapshotAll() *StateSnapshot {
+func (e *EngineImpl) SnapshotAll() []*StateSnapshot {
 	e.subAccountsMu.RLock()
-	states := make([]*subAccountState, 0, len(e.subAccounts))
-	for _, state := range e.subAccounts {
-		states = append(states, state)
+	accountSIDs := make([]model.SID, 0, len(e.subAccounts))
+	for sid := range e.subAccounts {
+		accountSIDs = append(accountSIDs, sid)
 	}
 	e.subAccountsMu.RUnlock()
 
-	snap := &StateSnapshot{
-		Calls:       make(map[model.SID]*model.Call),
-		Queues:      make(map[string]*model.Queue),
-		Conferences: make(map[string]*model.Conference),
-		SubAccounts: make(map[model.SID]*model.SubAccount),
-		Timestamp:   e.defaultClock.Now(),
-	}
-
-	// Include all calls from all subaccounts
-	for _, state := range states {
-		state.mu.RLock()
-		for sid, call := range state.calls {
-			callCopy := *call
-			callCopy.Timeline = append([]model.Event{}, call.Timeline...)
-			callCopy.Variables = make(map[string]string)
-			for k, v := range call.Variables {
-				callCopy.Variables[k] = v
-			}
-			snap.Calls[sid] = &callCopy
+	snapshots := make([]*StateSnapshot, 0, len(accountSIDs))
+	for _, sid := range accountSIDs {
+		snap, err := e.Snapshot(sid)
+		if err != nil {
+			// Skip accounts that no longer exist (race condition)
+			continue
 		}
-		state.mu.RUnlock()
+		snapshots = append(snapshots, snap)
 	}
 
-	// Flatten queues from all subaccounts
-	for _, state := range states {
-		state.mu.RLock()
-		for name, queue := range state.queues {
-			queueCopy := *queue
-			queueCopy.Members = append([]model.SID{}, queue.Members...)
-			queueCopy.Timeline = append([]model.Event{}, queue.Timeline...)
-			snap.Queues[name] = &queueCopy
-		}
-		state.mu.RUnlock()
-	}
-
-	// Flatten conferences from all subaccounts
-	for _, state := range states {
-		state.mu.RLock()
-		for name, conf := range state.conferences {
-			confCopy := *conf
-			confCopy.Participants = append([]model.SID{}, conf.Participants...)
-			confCopy.Timeline = append([]model.Event{}, conf.Timeline...)
-			snap.Conferences[name] = &confCopy
-		}
-		state.mu.RUnlock()
-	}
-
-	// Flatten all errors
-	for _, state := range states {
-		state.mu.RLock()
-		snap.Errors = append(snap.Errors, state.errors...)
-		state.mu.RUnlock()
-	}
-
-	// Include all subaccounts
-	for _, state := range states {
-		state.mu.RLock()
-		saCopy := *state.account
-		if state.account.IncomingNumbers != nil {
-			saCopy.IncomingNumbers = append([]model.IncomingNumber{}, state.account.IncomingNumbers...)
-		}
-		if state.account.Applications != nil {
-			apps := make([]model.Application, len(state.account.Applications))
-			copy(apps, state.account.Applications)
-			saCopy.Applications = apps
-		}
-		snap.SubAccounts[state.account.SID] = &saCopy
-		state.mu.RUnlock()
-	}
-
-	return snap
+	return snapshots
 }
 
 func buildAPICallResponse(call *model.Call, apiVersion string) *twilioopenapi.ApiV2010Call {

@@ -125,43 +125,59 @@ func (cs *ConsoleServer) handleSubAccounts(w http.ResponseWriter, r *http.Reques
 		views = append(views, toAccountView(acct))
 	}
 
-	snap := cs.engine.SnapshotAll()
-	for i := range views {
-		if sa, ok := snap.SubAccounts[model.SID(views[i].SID)]; ok {
-			appLookup := make(map[string]applicationView, len(sa.Applications))
-			apps := make([]applicationView, len(sa.Applications))
-			for idx, app := range sa.Applications {
-				viewApp := applicationView{
-					SID:                  app.SID,
-					FriendlyName:         app.FriendlyName,
-					VoiceURL:             app.VoiceURL,
-					VoiceMethod:          app.VoiceMethod,
-					StatusCallback:       app.StatusCallback,
-					StatusCallbackMethod: app.StatusCallbackMethod,
-					CreatedAt:            app.CreatedAt,
-				}
-				apps[idx] = viewApp
-				appLookup[app.SID] = viewApp
-			}
-			views[i].Applications = apps
-
-			numbers := make([]numberView, len(sa.IncomingNumbers))
-			for idx, num := range sa.IncomingNumbers {
-				viewNum := numberView{
-					SID:         num.SID,
-					PhoneNumber: num.PhoneNumber,
-					CreatedAt:   num.CreatedAt,
-				}
-				if num.VoiceApplicationSID != nil {
-					viewNum.ApplicationSID = *num.VoiceApplicationSID
-					if appView, ok := appLookup[viewNum.ApplicationSID]; ok {
-						viewNum.ApplicationName = appView.FriendlyName
-					}
-				}
-				numbers[idx] = viewNum
-			}
-			views[i].Numbers = numbers
+	snaps := cs.engine.SnapshotAll()
+	// Create a lookup map for snapshots by account SID
+	snapLookup := make(map[model.SID]*engine.StateSnapshot)
+	for _, snap := range snaps {
+		for sid := range snap.SubAccounts {
+			snapLookup[sid] = snap
+			break // Each snapshot should have only one subaccount
 		}
+	}
+
+	for i := range views {
+		snap, ok := snapLookup[model.SID(views[i].SID)]
+		if !ok {
+			continue
+		}
+		sa, ok := snap.SubAccounts[model.SID(views[i].SID)]
+		if !ok {
+			continue
+		}
+
+		appLookup := make(map[string]applicationView, len(sa.Applications))
+		apps := make([]applicationView, len(sa.Applications))
+		for idx, app := range sa.Applications {
+			viewApp := applicationView{
+				SID:                  app.SID,
+				FriendlyName:         app.FriendlyName,
+				VoiceURL:             app.VoiceURL,
+				VoiceMethod:          app.VoiceMethod,
+				StatusCallback:       app.StatusCallback,
+				StatusCallbackMethod: app.StatusCallbackMethod,
+				CreatedAt:            app.CreatedAt,
+			}
+			apps[idx] = viewApp
+			appLookup[app.SID] = viewApp
+		}
+		views[i].Applications = apps
+
+		numbers := make([]numberView, len(sa.IncomingNumbers))
+		for idx, num := range sa.IncomingNumbers {
+			viewNum := numberView{
+				SID:         num.SID,
+				PhoneNumber: num.PhoneNumber,
+				CreatedAt:   num.CreatedAt,
+			}
+			if num.VoiceApplicationSID != nil {
+				viewNum.ApplicationSID = *num.VoiceApplicationSID
+				if appView, ok := appLookup[viewNum.ApplicationSID]; ok {
+					viewNum.ApplicationName = appView.FriendlyName
+				}
+			}
+			numbers[idx] = viewNum
+		}
+		views[i].Numbers = numbers
 	}
 
 	sort.SliceStable(views, func(i, j int) bool {
@@ -208,7 +224,11 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 	}
 
 	accountModelSID := model.SID(accountSID)
-	snap := cs.engine.SnapshotAll()
+	snap, err := cs.engine.Snapshot(accountModelSID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	subAccountModel, ok := snap.SubAccounts[accountModelSID]
 	if !ok {
 		http.NotFound(w, r)
@@ -249,12 +269,10 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 
 	view.Numbers = numbers
 
-	// Filter calls by AccountSID
-	calls := make([]*model.Call, 0)
+	// Get calls for this account from the snapshot
+	calls := make([]*model.Call, 0, len(snap.Calls))
 	for _, call := range snap.Calls {
-		if call.AccountSID == accountModelSID {
-			calls = append(calls, call)
-		}
+		calls = append(calls, call)
 	}
 	sort.SliceStable(calls, func(i, j int) bool {
 		if calls[i].StartAt.Equal(calls[j].StartAt) {
@@ -263,20 +281,16 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 		return calls[i].StartAt.Before(calls[j].StartAt)
 	})
 
-	// Filter queues by AccountSID
-	queues := make([]*model.Queue, 0)
+	// Get queues for this account from the snapshot
+	queues := make([]*model.Queue, 0, len(snap.Queues))
 	for _, queue := range snap.Queues {
-		if queue.AccountSID == accountModelSID {
-			queues = append(queues, queue)
-		}
+		queues = append(queues, queue)
 	}
 
-	// Filter conferences by AccountSID
-	conferences := make([]*model.Conference, 0)
+	// Get conferences for this account from the snapshot
+	conferences := make([]*model.Conference, 0, len(snap.Conferences))
 	for _, conf := range snap.Conferences {
-		if conf.AccountSID == accountModelSID {
-			conferences = append(conferences, conf)
-		}
+		conferences = append(conferences, conf)
 	}
 
 	data := map[string]any{
@@ -301,9 +315,15 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	snap := cs.engine.SnapshotAll()
-	call, exists := snap.Calls[model.SID(sid)]
-	if !exists {
+	snaps := cs.engine.SnapshotAll()
+	var call *model.Call
+	for _, snap := range snaps {
+		if c, exists := snap.Calls[model.SID(sid)]; exists {
+			call = c
+			break
+		}
+	}
+	if call == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -318,9 +338,9 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 }
 
 func (cs *ConsoleServer) handleSnapshot(w http.ResponseWriter, r *http.Request) {
-	snap := cs.engine.SnapshotAll()
+	snaps := cs.engine.SnapshotAll()
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(snap); err != nil {
+	if err := json.NewEncoder(w).Encode(snaps); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -356,36 +376,41 @@ func (cs *ConsoleServer) handleNumberDetail(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	snap := cs.engine.SnapshotAll()
+	snaps := cs.engine.SnapshotAll()
 	var number numberView
 	var accountName string
 	found := false
 
-	for _, sa := range snap.SubAccounts {
-		appLookup := make(map[string]string, len(sa.Applications))
-		for _, app := range sa.Applications {
-			appLookup[app.SID] = app.FriendlyName
-		}
+	for _, snap := range snaps {
+		for _, sa := range snap.SubAccounts {
+			appLookup := make(map[string]string, len(sa.Applications))
+			for _, app := range sa.Applications {
+				appLookup[app.SID] = app.FriendlyName
+			}
 
-		for _, num := range sa.IncomingNumbers {
-			if num.SID == sid {
-				number = numberView{
-					SID:         num.SID,
-					PhoneNumber: num.PhoneNumber,
-					CreatedAt:   num.CreatedAt,
-				}
-				if num.VoiceApplicationSID != nil {
-					number.ApplicationSID = *num.VoiceApplicationSID
-					if name, ok := appLookup[number.ApplicationSID]; ok {
-						number.ApplicationName = name
+			for _, num := range sa.IncomingNumbers {
+				if num.SID == sid {
+					number = numberView{
+						SID:         num.SID,
+						PhoneNumber: num.PhoneNumber,
+						CreatedAt:   num.CreatedAt,
 					}
+					if num.VoiceApplicationSID != nil {
+						number.ApplicationSID = *num.VoiceApplicationSID
+						if name, ok := appLookup[number.ApplicationSID]; ok {
+							number.ApplicationName = name
+						}
+					}
+					accountName = sa.FriendlyName
+					found = true
+					break
 				}
-				accountName = sa.FriendlyName
-				found = true
+			}
+
+			if found {
 				break
 			}
 		}
-
 		if found {
 			break
 		}
