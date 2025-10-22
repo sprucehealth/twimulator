@@ -74,6 +74,9 @@ type CallFilter struct {
 
 // StateSnapshot is a JSON-serializable snapshot of the engine state
 type StateSnapshot struct {
+	engine     Engine
+	accountSID model.SID
+
 	Calls       map[model.SID]*model.Call       `json:"calls"`
 	Queues      map[string]*model.Queue         `json:"queues"`
 	Conferences map[string]*model.Conference    `json:"conferences"`
@@ -1552,6 +1555,8 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 	defer state.mu.RUnlock()
 
 	snap := &StateSnapshot{
+		engine:      e,
+		accountSID:  accountSID,
 		Calls:       make(map[model.SID]*model.Call),
 		Queues:      make(map[string]*model.Queue),
 		Conferences: make(map[string]*model.Conference),
