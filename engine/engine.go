@@ -81,6 +81,7 @@ type StateSnapshot struct {
 	Queues      map[string]*model.Queue         `json:"queues"`
 	Conferences map[string]*model.Conference    `json:"conferences"`
 	SubAccounts map[model.SID]*model.SubAccount `json:"sub_accounts"`
+	Errors      []error                         `json:"errors"`
 	Timestamp   time.Time                       `json:"timestamp"`
 }
 
@@ -1592,6 +1593,9 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 		snap.Conferences[name] = &confCopy
 	}
 
+	// Copy errors state.errors
+	snap.Errors = append(snap.Errors, state.errors...)
+
 	// Only include this subaccount
 	saCopy := *state.account
 	if state.account.IncomingNumbers != nil {
@@ -1660,6 +1664,13 @@ func (e *EngineImpl) SnapshotAll() *StateSnapshot {
 			confCopy.Timeline = append([]model.Event{}, conf.Timeline...)
 			snap.Conferences[name] = &confCopy
 		}
+		state.mu.RUnlock()
+	}
+
+	// Flatten all errors
+	for _, state := range states {
+		state.mu.RLock()
+		snap.Errors = append(snap.Errors, state.errors...)
 		state.mu.RUnlock()
 	}
 
