@@ -135,8 +135,8 @@ func TestRecordActionEmptyResponse(t *testing.T) {
 	e.Advance(1 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 
-	// Advance past the record timeout to trigger action
-	e.Advance(2 * time.Second)
+	// Advance past the record max length to trigger action
+	e.Advance(6 * time.Second)
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify the action was called

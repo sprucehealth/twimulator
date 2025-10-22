@@ -114,6 +114,7 @@ func (r *CallRunner) answer(ctx context.Context) {
 		twimlResp, err := r.fetchTwiML(ctx, currentURL, url.Values{})
 		if err != nil {
 			log.Printf("Failed to fetch Url for call %s: %v", r.call.SID, err)
+			r.recordError(err)
 			r.updateStatus(model.CallFailed)
 			return
 		}
@@ -137,6 +138,7 @@ func (r *CallRunner) answer(ctx context.Context) {
 			}
 			// Actual error - mark call as failed
 			log.Printf("TwiML execution error for call %s: %v", r.call.SID, err)
+			r.recordError(err)
 			r.updateStatus(model.CallFailed)
 			return
 		}
@@ -249,7 +251,11 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTw
 	case *twiml.Hangup:
 		return r.executeHangup(false)
 	default:
-		log.Printf("Unknown TwiML node type: %T", node)
+		msg := fmt.Sprintf("Unknown TwiML node type: %T", node)
+		err := errors.New(msg)
+		r.recordError(err)
+		log.Printf("ERROR: %s", err)
+		r.addEvent("twiml.invalid_node", map[string]any{"node": msg})
 	}
 	return nil
 }
@@ -934,6 +940,12 @@ func (r *CallRunner) updateStatus(status model.CallStatus) {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
 	r.engine.updateCallStatusLocked(r.state, r.call, status)
+}
+
+func (r *CallRunner) recordError(err error) {
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+	r.state.errors = append(r.state.errors, err)
 }
 
 func (r *CallRunner) addEvent(eventType string, detail map[string]any) {

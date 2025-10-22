@@ -37,6 +37,11 @@ func Parse(data []byte) (*Response, error) {
 }
 
 func parseResponse(decoder *xml.Decoder, start *xml.StartElement, resp *Response) error {
+	// Check for unknown attributes on <Response>
+	for _, attr := range start.Attr {
+		return fmt.Errorf("unknown attribute '%s' on <Response>", attr.Name.Local)
+	}
+
 	for {
 		token, err := decoder.Token()
 		if err == io.EOF {
@@ -95,9 +100,7 @@ func parseNode(decoder *xml.Decoder, start *xml.StartElement) (Node, error) {
 	case "Conference":
 		return parseConferenceDial(decoder, start)
 	default:
-		// Skip unknown elements
-		decoder.Skip()
-		return nil, nil
+		return nil, fmt.Errorf("unknown TwiML element: <%s>", start.Name.Local)
 	}
 }
 
@@ -109,6 +112,8 @@ func parseSay(decoder *xml.Decoder, start *xml.StartElement) (*Say, error) {
 			say.Voice = attr.Value
 		case "language":
 			say.Language = attr.Value
+		default:
+			return nil, fmt.Errorf("unknown attribute '%s' on <Say>", attr.Name.Local)
 		}
 	}
 
@@ -122,6 +127,9 @@ func parseSay(decoder *xml.Decoder, start *xml.StartElement) (*Say, error) {
 
 func parsePlay(decoder *xml.Decoder, start *xml.StartElement) (*Play, error) {
 	play := &Play{}
+	for _, attr := range start.Attr {
+		return nil, fmt.Errorf("unknown attribute '%s' on <Play>", attr.Name.Local)
+	}
 	if err := decoder.DecodeElement(&play.URL, start); err != nil {
 		return nil, err
 	}
@@ -131,10 +139,13 @@ func parsePlay(decoder *xml.Decoder, start *xml.StartElement) (*Play, error) {
 func parsePause(decoder *xml.Decoder, start *xml.StartElement) (*Pause, error) {
 	pause := &Pause{Length: 1 * time.Second} // default 1s
 	for _, attr := range start.Attr {
-		if attr.Name.Local == "length" {
+		switch attr.Name.Local {
+		case "length":
 			if n, err := strconv.Atoi(attr.Value); err == nil {
 				pause.Length = time.Duration(n) * time.Second
 			}
+		default:
+			return nil, fmt.Errorf("unknown attribute '%s' on <Pause>", attr.Name.Local)
 		}
 	}
 	decoder.Skip()
@@ -165,6 +176,8 @@ func parseGather(decoder *xml.Decoder, start *xml.StartElement) (*Gather, error)
 			gather.Action = attr.Value
 		case "method":
 			gather.Method = strings.ToUpper(attr.Value)
+		default:
+			return nil, fmt.Errorf("unknown attribute '%s' on <Gather>", attr.Name.Local)
 		}
 	}
 
@@ -213,6 +226,8 @@ func parseDial(decoder *xml.Decoder, start *xml.StartElement) (*Dial, error) {
 			if n, err := strconv.Atoi(attr.Value); err == nil {
 				dial.Timeout = time.Duration(n) * time.Second
 			}
+		default:
+			return nil, fmt.Errorf("unknown attribute '%s' on <Dial>", attr.Name.Local)
 		}
 	}
 
@@ -279,6 +294,8 @@ func parseEnqueue(decoder *xml.Decoder, start *xml.StartElement) (*Enqueue, erro
 			enqueue.WaitURL = attr.Value
 		case "waitMethod":
 			enqueue.WaitMethod = strings.ToUpper(attr.Value)
+		default:
+			return nil, fmt.Errorf("unknown attribute '%s' on <Enqueue>", attr.Name.Local)
 		}
 	}
 
@@ -293,8 +310,11 @@ func parseRedirect(decoder *xml.Decoder, start *xml.StartElement) (*Redirect, er
 	redirect := &Redirect{Method: "POST"}
 
 	for _, attr := range start.Attr {
-		if attr.Name.Local == "method" {
+		switch attr.Name.Local {
+		case "method":
 			redirect.Method = strings.ToUpper(attr.Value)
+		default:
+			return nil, fmt.Errorf("unknown attribute '%s' on <Redirect>", attr.Name.Local)
 		}
 	}
 
@@ -307,6 +327,9 @@ func parseRedirect(decoder *xml.Decoder, start *xml.StartElement) (*Redirect, er
 
 func parseNumber(decoder *xml.Decoder, start *xml.StartElement) (*Number, error) {
 	num := &Number{}
+	for _, attr := range start.Attr {
+		return nil, fmt.Errorf("unknown attribute '%s' on <Number>", attr.Name.Local)
+	}
 	if err := decoder.DecodeElement(&num.Number, start); err != nil {
 		return nil, err
 	}
@@ -315,6 +338,9 @@ func parseNumber(decoder *xml.Decoder, start *xml.StartElement) (*Number, error)
 
 func parseClient(decoder *xml.Decoder, start *xml.StartElement) (*Client, error) {
 	client := &Client{}
+	for _, attr := range start.Attr {
+		return nil, fmt.Errorf("unknown attribute '%s' on <Client>", attr.Name.Local)
+	}
 	if err := decoder.DecodeElement(&client.Name, start); err != nil {
 		return nil, err
 	}
@@ -323,6 +349,9 @@ func parseClient(decoder *xml.Decoder, start *xml.StartElement) (*Client, error)
 
 func parseQueueDial(decoder *xml.Decoder, start *xml.StartElement) (*QueueDial, error) {
 	queue := &QueueDial{}
+	for _, attr := range start.Attr {
+		return nil, fmt.Errorf("unknown attribute '%s' on <Queue>", attr.Name.Local)
+	}
 	if err := decoder.DecodeElement(&queue.Name, start); err != nil {
 		return nil, err
 	}
@@ -349,6 +378,8 @@ func parseConferenceDial(decoder *xml.Decoder, start *xml.StartElement) (*Confer
 			conf.StatusCallback = attr.Value
 		case "statusCallbackEvent":
 			conf.StatusCallbackEvent = attr.Value
+		default:
+			return nil, fmt.Errorf("unknown attribute '%s' on <Conference>", attr.Name.Local)
 		}
 	}
 
@@ -386,6 +417,8 @@ func parseRecord(decoder *xml.Decoder, start *xml.StartElement) (*Record, error)
 			if n, err := strconv.Atoi(attr.Value); err == nil {
 				record.TimeoutInSeconds = time.Duration(n) * time.Second
 			}
+		default:
+			return nil, fmt.Errorf("unknown attribute '%s' on <Record>", attr.Name.Local)
 		}
 	}
 

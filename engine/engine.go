@@ -98,6 +98,7 @@ type subAccountState struct {
 	queues          map[string]*model.Queue
 	conferences     map[string]*model.Conference
 	runners         map[model.SID]*CallRunner
+	errors          []error
 
 	// Participant states scoped by (conferenceSID, callSID)
 	participantStates map[model.SID]map[model.SID]*model.ParticipantState
@@ -1863,7 +1864,7 @@ func (e *EngineImpl) updateCallStatusLocked(state *subAccountState, call *model.
 
 	// Trigger status callback if configured and user is interested in this event
 	if call.StatusCallback != "" && e.shouldSendStatusCallback(call, newStatus) {
-		// Note: this must stay asynchronus to avoid deadlocks
+		// Note: this must stay asynchronous to avoid deadlocks
 		go e.sendStatusCallback(state, call)
 	}
 }
