@@ -287,7 +287,9 @@ func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
 			"url":   play.URL,
 			"error": err.Error(),
 		})
-		return fmt.Errorf("failed to fetch play URL %s: %w", play.URL, err)
+		err := fmt.Errorf("failed to fetch play URL %s: %w", play.URL, err)
+		r.recordError(err)
+		return err
 	}
 
 	// Check for non-2xx status codes
@@ -296,7 +298,9 @@ func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
 			"url":    play.URL,
 			"status": status,
 		})
-		return fmt.Errorf("play URL %s returned status %d", play.URL, status)
+		err := fmt.Errorf("play URL %s returned status %d", play.URL, status)
+		r.recordError(err)
+		return err
 	}
 
 	r.addEvent("play.success", map[string]any{
@@ -676,6 +680,58 @@ func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue,
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, enqueue.Name)
 	queueSID := queue.SID
 
+	// Validate WaitURL if provided
+	if enqueue.WaitURL != "" {
+		// Resolve the wait URL (may be relative)
+		resolvedWaitURL, err := resolveURL(currentTwimlDocumentURL, enqueue.WaitURL)
+		if err != nil {
+			r.addEvent("enqueue.wait_url_error", map[string]any{
+				"wait_url": enqueue.WaitURL,
+				"error":    err.Error(),
+			})
+			err := fmt.Errorf("failed to resolve wait URL %s: %w", enqueue.WaitURL, err)
+			r.recordError(err)
+			return err
+		}
+
+		// Fetch the wait URL to ensure it's accessible
+		reqCtx, cancel := context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+
+		var status int
+		if enqueue.WaitURLMethod == "GET" {
+			status, _, _, err = r.engine.webhook.GET(reqCtx, resolvedWaitURL)
+		} else {
+			status, _, _, err = r.engine.webhook.POST(reqCtx, resolvedWaitURL, nil)
+		}
+
+		if err != nil {
+			r.addEvent("enqueue.wait_url_error", map[string]any{
+				"wait_url": resolvedWaitURL,
+				"error":    err.Error(),
+			})
+			err := fmt.Errorf("failed to fetch wait URL %s: %w", resolvedWaitURL, err)
+			r.recordError(err)
+			return err
+		}
+
+		// Check for non-2xx status codes
+		if status < 200 || status >= 300 {
+			r.addEvent("enqueue.wait_url_error", map[string]any{
+				"wait_url": resolvedWaitURL,
+				"status":   status,
+			})
+			err := fmt.Errorf("wait URL %s returned status %d", resolvedWaitURL, status)
+			r.recordError(err)
+			return err
+		}
+
+		r.addEvent("enqueue.wait_url_validated", map[string]any{
+			"wait_url": resolvedWaitURL,
+			"status":   status,
+		})
+	}
+
 	// Check if there are waiting agents (from Dial Queue) to connect to
 	var targetCallSID model.SID
 	if len(queue.Members) > 0 {
@@ -991,7 +1047,7 @@ func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string
 		return nil
 	}
 
-	resolvedURL, err := r.resolveActionURL(currentTwimlDocumentURL, actionURL)
+	resolvedURL, err := resolveURL(currentTwimlDocumentURL, actionURL)
 	if err != nil {
 		r.addEvent("action.url_error", map[string]any{
 			"action": actionURL,
@@ -1019,29 +1075,6 @@ func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string
 	}
 
 	return r.executeTwiML(ctx, resp, resolvedURL)
-}
-
-// resolveActionURL resolves an action URL relative to the current TwiML document URL
-func (r *CallRunner) resolveActionURL(currentDocURL, actionURL string) (string, error) {
-	target, err := url.Parse(actionURL)
-	if err != nil {
-		return "", fmt.Errorf("invalid action URL %q: %w", actionURL, err)
-	}
-
-	if target.IsAbs() {
-		return target.String(), nil
-	}
-
-	if currentDocURL == "" {
-		return "", fmt.Errorf("cannot resolve relative action URL %q without base", actionURL)
-	}
-
-	base, err := url.Parse(currentDocURL)
-	if err != nil {
-		return "", fmt.Errorf("invalid base URL %q: %w", currentDocURL, err)
-	}
-
-	return base.ResolveReference(target).String(), nil
 }
 
 func (r *CallRunner) removeFromQueue(queue *model.Queue) {

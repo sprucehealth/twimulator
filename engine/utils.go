@@ -2,6 +2,8 @@ package engine
 
 import (
 	"errors"
+	"fmt"
+	"net/url"
 	"twimulator/model"
 )
 
@@ -29,4 +31,27 @@ func (s *StateSnapshot) Sync() error {
 	// replace s with the new snapshot
 	*s = *snapshot
 	return nil
+}
+
+// resolveActionURL resolves URL relative to the current TwiML document URL
+func resolveURL(currentDocURL, actionURL string) (string, error) {
+	target, err := url.Parse(actionURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid action URL %q: %w", actionURL, err)
+	}
+
+	if target.IsAbs() {
+		return target.String(), nil
+	}
+
+	if currentDocURL == "" {
+		return "", fmt.Errorf("cannot resolve relative action URL %q without base", actionURL)
+	}
+
+	base, err := url.Parse(currentDocURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid base URL %q: %w", currentDocURL, err)
+	}
+
+	return base.ResolveReference(target).String(), nil
 }

@@ -15,6 +15,7 @@ type SID string
 type CallStatus string
 
 const (
+	CallInitiated  CallStatus = "initiated"
 	CallQueued     CallStatus = "queued"
 	CallRinging    CallStatus = "ringing"
 	CallInProgress CallStatus = "in-progress"
@@ -24,7 +25,6 @@ const (
 	CallNoAnswer   CallStatus = "no-answer"
 	CallCanceled   CallStatus = "canceled"
 	CallAnswered   CallStatus = "answered"
-	CallInitiated  CallStatus = "initiated"
 )
 
 func (s CallStatus) IsTerminal() bool {
@@ -73,7 +73,7 @@ type Call struct {
 	Variables            map[string]string `json:"variables"`
 	Url                  string            `json:"url"`
 	StatusCallback       string            `json:"status_callback,omitempty"`
-	StatusCallbackEvents []string          `json:"status_callback_events,omitempty"` // Events to trigger callbacks for
+	StatusCallbackEvents []CallStatus      `json:"status_callback_events,omitempty"` // Events to trigger callbacks for
 }
 
 // Queue represents a call queue

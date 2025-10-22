@@ -347,9 +347,16 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		statusCallback = *params.StatusCallback
 	}
 
-	statusEvents := []string{}
+	statusEvents := []model.CallStatus{}
 	if params.StatusCallbackEvent != nil {
-		statusEvents = append(statusEvents, (*params.StatusCallbackEvent)...)
+		for _, eventStr := range *params.StatusCallbackEvent {
+			status := model.CallStatus(eventStr)
+			// Validate that the status is a valid CallStatus
+			if !isValidCallStatus(status) {
+				return nil, fmt.Errorf("invalid status callback event: %s", eventStr)
+			}
+			statusEvents = append(statusEvents, status)
+		}
 	}
 
 	callToken := ""
@@ -477,7 +484,7 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 		Variables:            make(map[string]string),
 		Url:                  app.VoiceURL,
 		StatusCallback:       app.StatusCallback,
-		StatusCallbackEvents: []string{"completed"}, // Twiml application only sends the completed event
+		StatusCallbackEvents: []model.CallStatus{model.CallCompleted}, // Twiml application only sends the completed event
 	}
 
 	call.Timeline = append(call.Timeline, model.NewEvent(
@@ -1817,6 +1824,28 @@ func (e *EngineImpl) updateCallStatusLocked(state *subAccountState, call *model.
 	if call.StatusCallback != "" && e.shouldSendStatusCallback(call, newStatus) {
 		// Note: this must stay asynchronous to avoid deadlocks
 		go e.sendStatusCallback(state, call)
+	} else {
+		// skipped status callback
+		call.Timeline = append(call.Timeline, model.NewEvent(
+			state.clock.Now(),
+			"webhook.status_callback_skipped",
+			map[string]any{
+				"from": oldStatus,
+				"to":   newStatus,
+			}))
+	}
+}
+
+// isValidCallStatus checks if a CallStatus value is one of the valid constants
+func isValidCallStatus(status model.CallStatus) bool {
+	switch status {
+	case model.CallInitiated, model.CallQueued, model.CallRinging,
+		model.CallInProgress, model.CallCompleted, model.CallBusy,
+		model.CallFailed, model.CallNoAnswer, model.CallCanceled,
+		model.CallAnswered:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1828,9 +1857,11 @@ func (e *EngineImpl) shouldSendStatusCallback(call *model.Call, status model.Cal
 	}
 
 	// Check if this status is in the requested events list
-	statusStr := string(status)
 	for _, event := range call.StatusCallbackEvents {
-		if event == statusStr {
+		if event == status {
+			return true
+		}
+		if status.IsTerminal() && event.IsTerminal() {
 			return true
 		}
 	}

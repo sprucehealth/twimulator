@@ -114,6 +114,10 @@ func parseSay(decoder *xml.Decoder, start *xml.StartElement) (*Say, error) {
 			say.Voice = attr.Value
 		case "language":
 			say.Language = attr.Value
+		case "loop":
+			if n, err := strconv.Atoi(attr.Value); err == nil {
+				say.Loop = n
+			}
 		default:
 			if attr.Value != "" {
 				return nil, fmt.Errorf("unknown attribute '%s' on <Say>", attr.Name.Local)
@@ -184,6 +188,14 @@ func parseGather(decoder *xml.Decoder, start *xml.StartElement) (*Gather, error)
 			gather.Action = attr.Value
 		case "method":
 			gather.Method = strings.ToUpper(attr.Value)
+		case "hints":
+			gather.Hints = attr.Value
+		case "speechTimeout":
+			if n, err := strconv.Atoi(attr.Value); err == nil {
+				gather.SpeechTimeout = time.Duration(n) * time.Second
+			}
+		case "speechModel":
+			gather.SpeechModel = attr.Value
 		default:
 			if attr.Value != "" {
 				return nil, fmt.Errorf("unknown attribute '%s' on <Gather>", attr.Name.Local)
@@ -292,8 +304,8 @@ func parseDial(decoder *xml.Decoder, start *xml.StartElement) (*Dial, error) {
 
 func parseEnqueue(decoder *xml.Decoder, start *xml.StartElement) (*Enqueue, error) {
 	enqueue := &Enqueue{
-		Method:     "POST",
-		WaitMethod: "POST",
+		Method:        "POST",
+		WaitURLMethod: "POST",
 	}
 
 	for _, attr := range start.Attr {
@@ -304,8 +316,8 @@ func parseEnqueue(decoder *xml.Decoder, start *xml.StartElement) (*Enqueue, erro
 			enqueue.Method = strings.ToUpper(attr.Value)
 		case "waitUrl":
 			enqueue.WaitURL = attr.Value
-		case "waitMethod":
-			enqueue.WaitMethod = strings.ToUpper(attr.Value)
+		case "waitUrlMethod":
+			enqueue.WaitURLMethod = strings.ToUpper(attr.Value)
 		default:
 			if attr.Value != "" {
 				return nil, fmt.Errorf("unknown attribute '%s' on <Enqueue>", attr.Name.Local)
@@ -417,7 +429,7 @@ func parseConferenceDial(decoder *xml.Decoder, start *xml.StartElement) (*Confer
 func parseRecord(decoder *xml.Decoder, start *xml.StartElement) (*Record, error) {
 	record := &Record{
 		MaxLength:        3600 * time.Second, // default 1 hour
-		PlayBeep:         true,                // default true
+		PlayBeep:         true,               // default true
 		Method:           "POST",
 		Transcribe:       false,
 		TimeoutInSeconds: 5 * time.Second, // default 5 seconds

@@ -19,6 +19,7 @@ type Say struct {
 	Text     string
 	Voice    string
 	Language string
+	Loop     int
 }
 
 func (Say) isNode() {}
@@ -39,12 +40,15 @@ func (Pause) isNode() {}
 
 // Gather collects DTMF input
 type Gather struct {
-	Input     string // "dtmf", "speech", "dtmf speech"
-	Timeout   time.Duration
-	NumDigits int
-	Action    string
-	Method    string // "POST" or "GET"
-	Children  []Node // Nested verbs to execute while gathering
+	Input          string // "dtmf", "speech", "dtmf speech"
+	Timeout        time.Duration
+	NumDigits      int
+	Action         string
+	Method         string // "POST" or "GET"
+	Hints          string
+	SpeechTimeout  time.Duration
+	SpeechModel    string
+	Children       []Node // Nested verbs to execute while gathering
 }
 
 func (Gather) isNode() {}
@@ -65,11 +69,11 @@ func (Dial) isNode() {}
 
 // Enqueue adds caller to a queue
 type Enqueue struct {
-	Name       string
-	Action     string
-	Method     string
-	WaitURL    string
-	WaitMethod string
+	Name          string
+	Action        string
+	Method        string
+	WaitURL       string
+	WaitURLMethod string
 }
 
 func (Enqueue) isNode() {}
@@ -122,13 +126,13 @@ func (QueueDial) isNode() {}
 
 // ConferenceDial is used inside <Dial> to join a conference
 type ConferenceDial struct {
-	Name                 string
-	Muted                bool
+	Name                   string
+	Muted                  bool
 	StartConferenceOnEnter bool
-	EndConferenceOnExit  bool
-	WaitURL              string
-	StatusCallback       string
-	StatusCallbackEvent  string
+	EndConferenceOnExit    bool
+	WaitURL                string
+	StatusCallback         string
+	StatusCallbackEvent    string
 }
 
 func (ConferenceDial) isNode() {}
