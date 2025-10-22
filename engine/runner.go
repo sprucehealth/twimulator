@@ -859,11 +859,6 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, cu
 	case <-r.hangupCh:
 		recordingStatus = "completed"
 		recordingDuration = r.clock.Now().Sub(startTime)
-	case <-r.clock.After(record.TimeoutInSeconds):
-		// Timeout waiting for speech
-		recordingStatus = "absent"
-		recordingDuration = 0
-		r.addEvent("record.timeout", map[string]any{})
 	case <-r.clock.After(record.MaxLength):
 		// Max length reached
 		recordingStatus = "completed"

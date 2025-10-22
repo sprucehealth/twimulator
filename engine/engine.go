@@ -1890,6 +1890,9 @@ func (e *EngineImpl) sendStatusCallback(state *subAccountState, call *model.Call
 
 	status, body, headers, err := e.webhook.POST(ctx, call.StatusCallback, form)
 
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
 	// Log the webhook - find and lock the subaccount
 	call.Timeline = append(call.Timeline, model.NewEvent(
 		state.clock.Now(),
