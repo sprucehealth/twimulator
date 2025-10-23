@@ -136,8 +136,15 @@ func parseSay(decoder *xml.Decoder, start *xml.StartElement) (*Say, error) {
 func parsePlay(decoder *xml.Decoder, start *xml.StartElement) (*Play, error) {
 	play := &Play{}
 	for _, attr := range start.Attr {
-		if attr.Value != "" {
-			return nil, fmt.Errorf("unknown attribute '%s' on <Play>", attr.Name.Local)
+		switch attr.Name.Local {
+		case "loop":
+			if n, err := strconv.Atoi(attr.Value); err == nil {
+				play.Loop = n
+			}
+		default:
+			if attr.Value != "" {
+				return nil, fmt.Errorf("unknown attribute '%s' on <Play>", attr.Name.Local)
+			}
 		}
 	}
 	if err := decoder.DecodeElement(&play.URL, start); err != nil {

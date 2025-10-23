@@ -26,7 +26,8 @@ func (Say) isNode() {}
 
 // Play plays an audio file
 type Play struct {
-	URL string
+	URL  string
+	Loop int
 }
 
 func (Play) isNode() {}
@@ -40,15 +41,15 @@ func (Pause) isNode() {}
 
 // Gather collects DTMF input
 type Gather struct {
-	Input          string // "dtmf", "speech", "dtmf speech"
-	Timeout        time.Duration
-	NumDigits      int
-	Action         string
-	Method         string // "POST" or "GET"
-	Hints          string
-	SpeechTimeout  time.Duration
-	SpeechModel    string
-	Children       []Node // Nested verbs to execute while gathering
+	Input         string // "dtmf", "speech", "dtmf speech"
+	Timeout       time.Duration
+	NumDigits     int
+	Action        string
+	Method        string // "POST" or "GET"
+	Hints         string
+	SpeechTimeout time.Duration
+	SpeechModel   string
+	Children      []Node // Nested verbs to execute while gathering
 }
 
 func (Gather) isNode() {}

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"twimulator/model"
@@ -680,58 +682,6 @@ func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue,
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, enqueue.Name)
 	queueSID := queue.SID
 
-	// Validate WaitURL if provided
-	if enqueue.WaitURL != "" {
-		// Resolve the wait URL (may be relative)
-		resolvedWaitURL, err := resolveURL(currentTwimlDocumentURL, enqueue.WaitURL)
-		if err != nil {
-			r.addEvent("enqueue.wait_url_error", map[string]any{
-				"wait_url": enqueue.WaitURL,
-				"error":    err.Error(),
-			})
-			err := fmt.Errorf("failed to resolve wait URL %s: %w", enqueue.WaitURL, err)
-			r.recordError(err)
-			return err
-		}
-
-		// Fetch the wait URL to ensure it's accessible
-		reqCtx, cancel := context.WithTimeout(ctx, r.timeout)
-		defer cancel()
-
-		var status int
-		if enqueue.WaitURLMethod == "GET" {
-			status, _, _, err = r.engine.webhook.GET(reqCtx, resolvedWaitURL)
-		} else {
-			status, _, _, err = r.engine.webhook.POST(reqCtx, resolvedWaitURL, nil)
-		}
-
-		if err != nil {
-			r.addEvent("enqueue.wait_url_error", map[string]any{
-				"wait_url": resolvedWaitURL,
-				"error":    err.Error(),
-			})
-			err := fmt.Errorf("failed to fetch wait URL %s: %w", resolvedWaitURL, err)
-			r.recordError(err)
-			return err
-		}
-
-		// Check for non-2xx status codes
-		if status < 200 || status >= 300 {
-			r.addEvent("enqueue.wait_url_error", map[string]any{
-				"wait_url": resolvedWaitURL,
-				"status":   status,
-			})
-			err := fmt.Errorf("wait URL %s returned status %d", resolvedWaitURL, status)
-			r.recordError(err)
-			return err
-		}
-
-		r.addEvent("enqueue.wait_url_validated", map[string]any{
-			"wait_url": resolvedWaitURL,
-			"status":   status,
-		})
-	}
-
 	// Check if there are waiting agents (from Dial Queue) to connect to
 	var targetCallSID model.SID
 	if len(queue.Members) > 0 {
@@ -822,6 +772,112 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 		"wait_url":  enqueue.WaitURL,
 		"action":    enqueue.Action,
 	})
+
+	// Fetch and parse WaitURL if provided
+	// WaitURL can return either TwiML or an audio file
+	var waitTwiML *twiml.Response
+	var waitAudioURL string
+	if enqueue.WaitURL != "" {
+		resolvedWaitURL, urlErr := resolveURL(currentTwimlDocumentURL, enqueue.WaitURL)
+		if urlErr != nil {
+			r.addEvent("enqueue.wait_url_error", map[string]any{
+				"wait_url": enqueue.WaitURL,
+				"error":    urlErr.Error(),
+			})
+			err := fmt.Errorf("failed to resolve wait URL %s: %w", enqueue.WaitURL, urlErr)
+			r.recordError(err)
+			return err
+		}
+
+		reqCtx, cancel := context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+
+		var status int
+		var body []byte
+		var headers http.Header
+		var fetchErr error
+		if enqueue.WaitURLMethod == "GET" {
+			status, body, headers, fetchErr = r.engine.webhook.GET(reqCtx, resolvedWaitURL)
+		} else {
+			status, body, headers, fetchErr = r.engine.webhook.POST(reqCtx, resolvedWaitURL, nil)
+		}
+
+		if fetchErr != nil {
+			r.addEvent("enqueue.wait_url_error", map[string]any{
+				"wait_url": resolvedWaitURL,
+				"error":    fetchErr.Error(),
+			})
+			err := fmt.Errorf("failed to fetch wait URL %s: %w", resolvedWaitURL, fetchErr)
+			r.recordError(err)
+			return err
+		}
+
+		if status < 200 || status >= 300 {
+			r.addEvent("enqueue.wait_url_error", map[string]any{
+				"wait_url": resolvedWaitURL,
+				"status":   status,
+			})
+			err := fmt.Errorf("wait URL %s returned status %d", resolvedWaitURL, status)
+			r.recordError(err)
+			return err
+		}
+
+		// Check Content-Type to determine if it's TwiML or audio
+		contentType := headers.Get("Content-Type")
+
+		// Try to parse as TwiML first (text/xml or application/xml)
+		if strings.Contains(contentType, "xml") || contentType == "" {
+			parsed, parseErr := twiml.Parse(body)
+			if parseErr == nil {
+				waitTwiML = parsed
+				r.addEvent("enqueue.wait_url_fetched", map[string]any{
+					"wait_url": resolvedWaitURL,
+					"type":     "twiml",
+					"status":   status,
+				})
+			} else if strings.Contains(contentType, "xml") {
+				r.recordError(parseErr)
+				r.addEvent("enqueue.wait_url_error", map[string]any{
+					"wait_url": resolvedWaitURL,
+					"type":     "twiml",
+					"status":   status,
+					"error":    parseErr.Error(),
+				})
+			} else {
+				// If parsing as TwiML failed, treat it as audio URL
+				waitAudioURL = resolvedWaitURL
+				r.addEvent("enqueue.wait_url_fetched", map[string]any{
+					"wait_url": resolvedWaitURL,
+					"type":     "audio",
+					"status":   status,
+				})
+			}
+		} else {
+			// Content type indicates audio (audio/*, etc.)
+			waitAudioURL = resolvedWaitURL
+			r.addEvent("enqueue.wait_url_fetched", map[string]any{
+				"wait_url": resolvedWaitURL,
+				"type":     "audio",
+				"status":   status,
+			})
+		}
+	}
+
+	// Execute wait TwiML once to validate it (e.g., check Play URLs are reachable)
+	if waitTwiML != nil {
+		if err := r.executeTwiML(ctx, waitTwiML, currentTwimlDocumentURL); err != nil {
+			r.addEvent("enqueue.wait_twiml_error", map[string]any{
+				"error": err.Error(),
+			})
+			// Log error but don't fail the enqueue
+			r.recordError(err)
+		}
+	} else if waitAudioURL != "" {
+		// Audio URL was validated above, just log that it would be played
+		r.addEvent("enqueue.wait_audio_validated", map[string]any{
+			"audio_url": waitAudioURL,
+		})
+	}
 
 	// Wait indefinitely - no timeout for Enqueue (unlike Dial Queue)
 	// The call stays in queue until:
