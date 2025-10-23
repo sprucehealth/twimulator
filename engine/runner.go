@@ -349,10 +349,11 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 	}
 
 	r.addEvent("twiml.gather", map[string]any{
-		"input":      gather.Input,
-		"timeout":    timeout.Seconds(),
-		"num_digits": gather.NumDigits,
-		"action":     gather.Action,
+		"input":        gather.Input,
+		"timeout":      timeout.Seconds(),
+		"num_digits":   gather.NumDigits,
+		"finish_on_key": gather.FinishOnKey,
+		"action":       gather.Action,
 	})
 
 	r.state.mu.Lock()
@@ -388,44 +389,88 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 		return nil
 	}
 
-	// Wait for digits or timeout
-	var digits string
+	// Collect digits one by one until:
+	// - finishOnKey is pressed (if set)
+	// - numDigits is reached (if > 0)
+	// - timeout occurs
+	// - hangup or context cancellation
+	var collectedDigits string
 	var urlUpdated bool
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-r.hangupCh:
-		return nil
-	case <-r.urlUpdateCh:
-		// URL updated, skip through gather
-		r.addEvent("gather.interrupted", map[string]any{"reason": "url_updated"})
-		urlUpdated = true
-	case digits = <-r.gatherCh:
-		// Got digits
-		r.addEvent("gather.digits", map[string]any{"digits": digits})
-	case <-r.clock.After(timeout):
-		// Timeout
-		digits = ""
-		r.addEvent("gather.timeout", map[string]any{})
+	timeoutTimer := r.clock.After(timeout)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.hangupCh:
+			return nil
+		case <-r.urlUpdateCh:
+			// URL updated, skip through gather
+			r.addEvent("gather.interrupted", map[string]any{"reason": "url_updated"})
+			urlUpdated = true
+			goto gatherComplete
+		case digits := <-r.gatherCh:
+			// Got one or more digits - process each character individually
+			for _, char := range digits {
+				digit := string(char)
+
+				// Check if it's the finish key
+				if gather.FinishOnKey != "" && digit == gather.FinishOnKey {
+					r.addEvent("gather.finish_key_pressed", map[string]any{
+						"collected_digits": collectedDigits,
+						"finish_key":       digit,
+					})
+					goto gatherComplete
+				}
+
+				// Not a finish key, add to collected digits
+				collectedDigits += digit
+				r.addEvent("gather.digit_received", map[string]any{
+					"digit":            digit,
+					"collected_digits": collectedDigits,
+					"target_digits":    gather.NumDigits,
+				})
+
+				// Check if we've reached numDigits
+				if gather.NumDigits > 0 && len(collectedDigits) >= gather.NumDigits {
+					r.addEvent("gather.num_digits_reached", map[string]any{
+						"collected_digits": collectedDigits,
+						"num_digits":       gather.NumDigits,
+					})
+					goto gatherComplete
+				}
+			}
+
+			// If finishOnKey is empty and numDigits is 0, continue collecting
+			// (will only stop on timeout or interruption)
+
+		case <-timeoutTimer:
+			// Timeout
+			r.addEvent("gather.timeout", map[string]any{
+				"collected_digits": collectedDigits,
+			})
+			goto gatherComplete
+		}
 	}
 
+gatherComplete:
 	// If URL was updated, skip action callback entirely
 	if urlUpdated {
 		return ErrURLUpdated
 	}
 
-	if digits == "" {
+	if collectedDigits == "" {
 		return nil
 	}
 
 	r.state.mu.Lock()
 	r.call.CurrentEndpoint = ""
-	r.call.Variables["Digits"] = digits
+	r.call.Variables["Digits"] = collectedDigits
 	r.state.mu.Unlock()
 
 	// Call action callback with gathered digits
 	form := url.Values{}
-	form.Set("Digits", digits)
+	form.Set("Digits", collectedDigits)
 
 	return r.executeActionCallback(ctx, gather.Action, form, currentTwimlDocumentURL, false)
 }

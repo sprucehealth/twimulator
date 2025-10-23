@@ -205,3 +205,7 @@ func (c *Client) SetClock(clock engine.Clock) error {
 func (c *Client) AdvanceClock(d time.Duration) error {
 	return c.engine.AdvanceForAccount(model.SID(c.subaccountSID), d)
 }
+
+func (c *Client) SendDigits(callSID model.SID, digits string) error {
+	return c.engine.SendDigits(model.SID(c.subaccountSID), callSID, digits)
+}
