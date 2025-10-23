@@ -11,6 +11,10 @@ import (
 // SID represents a Twilio-like Session ID with a prefix
 type SID string
 
+func (s SID) String() string {
+	return string(s)
+}
+
 // CallStatus represents the current status of a call
 type CallStatus string
 

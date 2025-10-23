@@ -176,7 +176,7 @@ func parseGather(decoder *xml.Decoder, start *xml.StartElement) (*Gather, error)
 		Input:       "dtmf",
 		Timeout:     "5", // Default timeout is 5 seconds
 		NumDigits:   0,
-		FinishOnKey: "#", // Default finish key is #
+		FinishOnKey: "",
 		Method:      "POST",
 	}
 
