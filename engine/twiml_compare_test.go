@@ -158,7 +158,7 @@ func TestTwiMLWithGatherSimpleComparison(t *testing.T) {
 		&twiml.Say{Text: "Welcome", Voice: "", Language: ""},
 		&twiml.Gather{
 			Input:     "dtmf",
-			Timeout:   5 * time.Second,
+			Timeout:   "5",
 			NumDigits: 1,
 			Action:    "http://test/gather",
 			Method:    "POST",

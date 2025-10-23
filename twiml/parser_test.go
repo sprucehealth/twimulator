@@ -57,8 +57,8 @@ func TestParseGather(t *testing.T) {
 	if gather.Input != "dtmf" {
 		t.Errorf("Expected input 'dtmf', got %q", gather.Input)
 	}
-	if gather.Timeout != 5*time.Second {
-		t.Errorf("Expected timeout 5s, got %v", gather.Timeout)
+	if gather.Timeout != "5" {
+		t.Errorf("Expected timeout '5', got %v", gather.Timeout)
 	}
 	if gather.NumDigits != 1 {
 		t.Errorf("Expected numDigits 1, got %d", gather.NumDigits)
@@ -341,5 +341,196 @@ func TestParseRecordDefaults(t *testing.T) {
 	}
 	if record.TimeoutInSeconds != 5*time.Second {
 		t.Errorf("Expected default timeout 5s, got %v", record.TimeoutInSeconds)
+	}
+}
+
+func TestParseSayLoop(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice" loop="3">Hello World</Say>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	say, ok := resp.Children[0].(*Say)
+	if !ok {
+		t.Fatalf("Expected *Say, got %T", resp.Children[0])
+	}
+
+	if say.Loop != 3 {
+		t.Errorf("Expected loop 3, got %d", say.Loop)
+	}
+}
+
+func TestParsePlayLoop(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Play loop="5">http://example.com/music.mp3</Play>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	play, ok := resp.Children[0].(*Play)
+	if !ok {
+		t.Fatalf("Expected *Play, got %T", resp.Children[0])
+	}
+
+	if play.Loop != 5 {
+		t.Errorf("Expected loop 5, got %d", play.Loop)
+	}
+	if play.URL != "http://example.com/music.mp3" {
+		t.Errorf("Expected URL, got %q", play.URL)
+	}
+}
+
+func TestParseGatherTimeoutAuto(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather timeout="auto">
+    <Say>Press a digit</Say>
+  </Gather>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	gather, ok := resp.Children[0].(*Gather)
+	if !ok {
+		t.Fatalf("Expected *Gather, got %T", resp.Children[0])
+	}
+
+	if gather.Timeout != "auto" {
+		t.Errorf("Expected timeout 'auto', got %q", gather.Timeout)
+	}
+}
+
+func TestParseGatherSpeechTimeout(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather input="speech" speechTimeout="auto" speechModel="default" hints="yes,no">
+    <Say>Say yes or no</Say>
+  </Gather>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	gather, ok := resp.Children[0].(*Gather)
+	if !ok {
+		t.Fatalf("Expected *Gather, got %T", resp.Children[0])
+	}
+
+	if gather.SpeechTimeout != "auto" {
+		t.Errorf("Expected speechTimeout 'auto', got %q", gather.SpeechTimeout)
+	}
+	if gather.SpeechModel != "default" {
+		t.Errorf("Expected speechModel 'default', got %q", gather.SpeechModel)
+	}
+	if gather.Hints != "yes,no" {
+		t.Errorf("Expected hints 'yes,no', got %q", gather.Hints)
+	}
+}
+
+func TestParseGatherFinishOnKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		finishOnKey string
+		shouldError bool
+	}{
+		{"default hash", "#", false},
+		{"asterisk", "*", false},
+		{"digit 0", "0", false},
+		{"digit 5", "5", false},
+		{"digit 9", "9", false},
+		{"empty string", "", false},
+		{"invalid letter", "a", true},
+		{"invalid multiple", "12", true},
+		{"invalid double", "##", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather finishOnKey="` + tt.finishOnKey + `">
+    <Say>Press digits</Say>
+  </Gather>
+</Response>`
+
+			resp, err := Parse([]byte(xml))
+			if tt.shouldError {
+				if err == nil {
+					t.Errorf("Expected error for finishOnKey %q, but got none", tt.finishOnKey)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Unexpected parse error: %v", err)
+			}
+
+			gather, ok := resp.Children[0].(*Gather)
+			if !ok {
+				t.Fatalf("Expected *Gather, got %T", resp.Children[0])
+			}
+
+			if gather.FinishOnKey != tt.finishOnKey {
+				t.Errorf("Expected finishOnKey %q, got %q", tt.finishOnKey, gather.FinishOnKey)
+			}
+		})
+	}
+}
+
+func TestParseGatherDefaults(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather>
+    <Say>Press a digit</Say>
+  </Gather>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	gather, ok := resp.Children[0].(*Gather)
+	if !ok {
+		t.Fatalf("Expected *Gather, got %T", resp.Children[0])
+	}
+
+	if gather.Input != "dtmf" {
+		t.Errorf("Expected default input 'dtmf', got %q", gather.Input)
+	}
+	if gather.Timeout != "5" {
+		t.Errorf("Expected default timeout '5', got %q", gather.Timeout)
+	}
+	if gather.FinishOnKey != "#" {
+		t.Errorf("Expected default finishOnKey '#', got %q", gather.FinishOnKey)
+	}
+	if gather.Method != "POST" {
+		t.Errorf("Expected default method 'POST', got %q", gather.Method)
+	}
+}
+
+func TestParseUnknownAttribute(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say unknownAttr="value">Hello</Say>
+</Response>`
+
+	_, err := Parse([]byte(xml))
+	if err == nil {
+		t.Fatal("Expected error for unknown attribute, got none")
 	}
 }

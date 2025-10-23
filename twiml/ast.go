@@ -42,12 +42,13 @@ func (Pause) isNode() {}
 // Gather collects DTMF input
 type Gather struct {
 	Input         string // "dtmf", "speech", "dtmf speech"
-	Timeout       time.Duration
+	Timeout       string // Can be "auto" or a positive integer (in seconds), default is 5
 	NumDigits     int
+	FinishOnKey   string // The digit to end input, default is "#"
 	Action        string
 	Method        string // "POST" or "GET"
 	Hints         string
-	SpeechTimeout time.Duration
+	SpeechTimeout string // Can be "auto" or a positive integer (in seconds)
 	SpeechModel   string
 	Children      []Node // Nested verbs to execute while gathering
 }

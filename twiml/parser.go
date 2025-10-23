@@ -173,10 +173,11 @@ func parsePause(decoder *xml.Decoder, start *xml.StartElement) (*Pause, error) {
 
 func parseGather(decoder *xml.Decoder, start *xml.StartElement) (*Gather, error) {
 	gather := &Gather{
-		Input:     "dtmf",
-		Timeout:   5 * time.Second,
-		NumDigits: 0,
-		Method:    "POST",
+		Input:       "dtmf",
+		Timeout:     "5", // Default timeout is 5 seconds
+		NumDigits:   0,
+		FinishOnKey: "#", // Default finish key is #
+		Method:      "POST",
 	}
 
 	for _, attr := range start.Attr {
@@ -184,12 +185,19 @@ func parseGather(decoder *xml.Decoder, start *xml.StartElement) (*Gather, error)
 		case "input":
 			gather.Input = attr.Value
 		case "timeout":
-			if n, err := strconv.Atoi(attr.Value); err == nil {
-				gather.Timeout = time.Duration(n) * time.Second
-			}
+			// timeout can be "auto" or a positive integer
+			gather.Timeout = attr.Value
 		case "numDigits":
 			if n, err := strconv.Atoi(attr.Value); err == nil {
 				gather.NumDigits = n
+			}
+		case "finishOnKey":
+			// finishOnKey can be #, *, 0-9, or empty string
+			if attr.Value == "" || attr.Value == "#" || attr.Value == "*" ||
+				(len(attr.Value) == 1 && attr.Value[0] >= '0' && attr.Value[0] <= '9') {
+				gather.FinishOnKey = attr.Value
+			} else {
+				return nil, fmt.Errorf("invalid finishOnKey '%s': must be #, *, 0-9, or empty string", attr.Value)
 			}
 		case "action":
 			gather.Action = attr.Value
@@ -198,9 +206,8 @@ func parseGather(decoder *xml.Decoder, start *xml.StartElement) (*Gather, error)
 		case "hints":
 			gather.Hints = attr.Value
 		case "speechTimeout":
-			if n, err := strconv.Atoi(attr.Value); err == nil {
-				gather.SpeechTimeout = time.Duration(n) * time.Second
-			}
+			// speechTimeout can be "auto" or a positive integer
+			gather.SpeechTimeout = attr.Value
 		case "speechModel":
 			gather.SpeechModel = attr.Value
 		default:

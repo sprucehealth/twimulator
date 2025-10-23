@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -335,9 +336,21 @@ func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause) error
 
 func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, currentTwimlDocumentURL string, terminated *bool) error {
 	r.trackTwiML(gather)
+
+	// Parse timeout: can be "auto" or a numeric value
+	// When "auto", default is 5 seconds
+	timeout := 5 * time.Second // default
+	if gather.Timeout == "auto" {
+		timeout = 5 * time.Second
+	} else if gather.Timeout != "" {
+		if n, err := strconv.Atoi(gather.Timeout); err == nil {
+			timeout = time.Duration(n) * time.Second
+		}
+	}
+
 	r.addEvent("twiml.gather", map[string]any{
 		"input":      gather.Input,
-		"timeout":    gather.Timeout.Seconds(),
+		"timeout":    timeout.Seconds(),
 		"num_digits": gather.NumDigits,
 		"action":     gather.Action,
 	})
@@ -390,7 +403,7 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 	case digits = <-r.gatherCh:
 		// Got digits
 		r.addEvent("gather.digits", map[string]any{"digits": digits})
-	case <-r.clock.After(gather.Timeout):
+	case <-r.clock.After(timeout):
 		// Timeout
 		digits = ""
 		r.addEvent("gather.timeout", map[string]any{})
