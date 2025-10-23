@@ -245,7 +245,7 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTw
 	case *twiml.Enqueue:
 		return r.executeEnqueue(ctx, n, currentTwimlDocumentURL)
 	case *twiml.Redirect:
-		return r.executeRedirect(ctx, n)
+		return r.executeRedirect(ctx, n, currentTwimlDocumentURL)
 	case *twiml.Record:
 		return r.executeRecord(ctx, n, currentTwimlDocumentURL, terminated)
 	case *twiml.Hangup:
@@ -872,20 +872,30 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 	return r.executeActionCallback(ctx, enqueue.Action, form, currentTwimlDocumentURL, false)
 }
 
-func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redirect) error {
+func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redirect, currentTwimlDocumentURL string) error {
 	r.trackTwiML(redirect)
 	r.addEvent("twiml.redirect", map[string]any{
 		"url":    redirect.URL,
 		"method": redirect.Method,
 	})
 
+	resolvedURL, err := resolveURL(currentTwimlDocumentURL, redirect.URL)
+	if err != nil {
+		r.addEvent("action.url_error", map[string]any{
+			"action": redirect.URL,
+			"base":   currentTwimlDocumentURL,
+			"error":  err.Error(),
+		})
+		return err
+	}
+
 	// Fetch and execute new TwiML
-	resp, err := r.fetchTwiML(ctx, redirect.URL, url.Values{})
+	resp, err := r.fetchTwiML(ctx, resolvedURL, url.Values{})
 	if err != nil {
 		return err
 	}
 
-	return r.executeTwiML(ctx, resp, redirect.URL)
+	return r.executeTwiML(ctx, resp, resolvedURL)
 }
 
 func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, currentTwimlDocumentURL string, terminated *bool) error {
