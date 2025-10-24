@@ -157,12 +157,11 @@ func TestTwiMLWithGatherSimpleComparison(t *testing.T) {
 	expected := []any{
 		&twiml.Say{Text: "Welcome", Voice: "", Language: ""},
 		&twiml.Gather{
-			Input:       "dtmf",
-			Timeout:     "5",
-			NumDigits:   1,
-			FinishOnKey: "#", // Default finish key
-			Action:      "http://test/gather",
-			Method:      "POST",
+			Input:     "dtmf",
+			Timeout:   "5",
+			NumDigits: 1,
+			Action:    "http://test/gather",
+			Method:    "POST",
 			Children: []twiml.Node{
 				&twiml.Say{Text: "Press 1 for sales", Voice: "", Language: ""},
 				&twiml.Say{Text: "Press 2 for support", Voice: "", Language: ""},

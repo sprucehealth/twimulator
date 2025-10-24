@@ -372,7 +372,7 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSIDModel)
 	}
 
 	// Lock only this subaccount
@@ -441,7 +441,7 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	// Lock only this subaccount
@@ -544,7 +544,7 @@ func (e *EngineImpl) CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncom
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSIDModel)
 	}
 
 	// Lock only this subaccount
@@ -623,7 +623,7 @@ func (e *EngineImpl) ListIncomingPhoneNumber(params *twilioopenapi.ListIncomingP
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	// Lock only this subaccount
@@ -665,7 +665,7 @@ func (e *EngineImpl) UpdateIncomingPhoneNumber(sid string, params *twilioopenapi
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	// Find the incoming number by SID across all subaccounts
@@ -681,7 +681,7 @@ func (e *EngineImpl) UpdateIncomingPhoneNumber(sid string, params *twilioopenapi
 	state.mu.RUnlock()
 
 	if foundNumber == nil {
-		return nil, fmt.Errorf("incoming phone number %s not found", sid)
+		return nil, notFoundError(model.SID(sid))
 	}
 
 	// Lock only this subaccount
@@ -746,7 +746,7 @@ func (e *EngineImpl) DeleteIncomingPhoneNumber(sid string, params *twilioopenapi
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("subaccount %s not found", accountSID)
+		return notFoundError(accountSID)
 	}
 
 	// Find and delete the incoming number
@@ -765,7 +765,7 @@ func (e *EngineImpl) DeleteIncomingPhoneNumber(sid string, params *twilioopenapi
 			return nil
 		}
 	}
-	return fmt.Errorf("incoming phone number %s not found", sid)
+	return notFoundError(model.SID(sid))
 }
 
 // CreateApplication registers a Twilio Application for an account
@@ -802,7 +802,7 @@ func (e *EngineImpl) CreateApplication(params *twilioopenapi.CreateApplicationPa
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	// Lock only this subaccount
@@ -862,7 +862,7 @@ func (e *EngineImpl) CreateQueue(params *twilioopenapi.CreateQueueParams) (*twil
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	// Lock only this subaccount
@@ -898,7 +898,7 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	callSID := model.SID(sid)
@@ -907,7 +907,7 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 	call, exists := state.calls[callSID]
 	state.mu.RUnlock()
 	if !exists {
-		return nil, fmt.Errorf("call %s not found", sid)
+		return nil, notFoundError(callSID)
 	}
 
 	// Lock only this subaccount
@@ -972,14 +972,14 @@ func (e *EngineImpl) AnswerCall(subaccountSID, callSID model.SID) error {
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("subaccount %s not found", subaccountSID)
+		return notFoundError(subaccountSID)
 	}
 
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 	call, exists := state.calls[callSID]
 	if !exists {
-		return fmt.Errorf("call %s not found", callSID)
+		return notFoundError(callSID)
 	}
 	if call.Status != model.CallRinging {
 		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
@@ -1004,14 +1004,14 @@ func (e *EngineImpl) SetCallBusy(subaccountSID, callSID model.SID) error {
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("subaccount %s not found", subaccountSID)
+		return notFoundError(subaccountSID)
 	}
 
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 	call, exists := state.calls[callSID]
 	if !exists {
-		return fmt.Errorf("call %s not found", callSID)
+		return notFoundError(callSID)
 	}
 	if call.Status != model.CallRinging {
 		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
@@ -1036,14 +1036,14 @@ func (e *EngineImpl) SetCallFailed(subaccountSID, callSID model.SID) error {
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("subaccount %s not found", subaccountSID)
+		return notFoundError(subaccountSID)
 	}
 
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 	call, exists := state.calls[callSID]
 	if !exists {
-		return fmt.Errorf("call %s not found", callSID)
+		return notFoundError(callSID)
 	}
 	if call.Status != model.CallRinging {
 		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
@@ -1068,14 +1068,14 @@ func (e *EngineImpl) Hangup(subaccountSID, callSID model.SID) error {
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("subaccount %s not found", subaccountSID)
+		return notFoundError(subaccountSID)
 	}
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	call, exists := state.calls[callSID]
 	if !exists {
-		return fmt.Errorf("call %s not found", callSID)
+		return notFoundError(callSID)
 	}
 	runner := state.runners[callSID]
 
@@ -1101,18 +1101,18 @@ func (e *EngineImpl) SendDigits(subaccountSID, callSID model.SID, digits string)
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("subaccount %s not found", subaccountSID)
+		return notFoundError(subaccountSID)
 	}
 
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 	_, exists = state.calls[callSID]
 	if !exists {
-		return fmt.Errorf("call %s not found", callSID)
+		return notFoundError(callSID)
 	}
 	runner := state.runners[callSID]
 	if runner == nil {
-		return fmt.Errorf("call %s not found", callSID)
+		return notFoundError(callSID)
 	}
 
 	runner.SendDigits(digits)
@@ -1131,7 +1131,7 @@ func (e *EngineImpl) FetchCall(sid string, params *twilioopenapi.FetchCallParams
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	callSID := model.SID(sid)
@@ -1140,7 +1140,7 @@ func (e *EngineImpl) FetchCall(sid string, params *twilioopenapi.FetchCallParams
 	defer state.mu.RUnlock()
 	call, exists := state.calls[callSID]
 	if !exists {
-		return nil, fmt.Errorf("call %s not found", sid)
+		return nil, notFoundError(callSID)
 	}
 	resp := buildAPICallResponse(call, e.apiVersion)
 
@@ -1159,7 +1159,7 @@ func (e *EngineImpl) FetchConference(sid string, params *twilioopenapi.FetchConf
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	state.mu.RLock()
@@ -1175,7 +1175,7 @@ func (e *EngineImpl) FetchConference(sid string, params *twilioopenapi.FetchConf
 		}
 	}
 
-	return nil, fmt.Errorf("conference %s not found", sid)
+	return nil, notFoundError(model.SID(sid))
 }
 
 // ListConference returns conferences filtered by optional friendly name
@@ -1196,7 +1196,7 @@ func (e *EngineImpl) ListConference(params *twilioopenapi.ListConferenceParams) 
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	// Lock only this subaccount
@@ -1234,7 +1234,7 @@ func (e *EngineImpl) UpdateConference(sid string, params *twilioopenapi.UpdateCo
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	state.mu.Lock()
@@ -1249,7 +1249,7 @@ func (e *EngineImpl) UpdateConference(sid string, params *twilioopenapi.UpdateCo
 	}
 
 	if conf == nil {
-		return nil, fmt.Errorf("conference %s not found", sid)
+		return nil, notFoundError(model.SID(sid))
 	}
 
 	// Update status if provided
@@ -1296,7 +1296,7 @@ func (e *EngineImpl) FetchParticipant(conferenceSid string, callSid string, para
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	state.mu.Lock()
@@ -1311,7 +1311,7 @@ func (e *EngineImpl) FetchParticipant(conferenceSid string, callSid string, para
 	}
 
 	if conf == nil {
-		return nil, fmt.Errorf("conference %s not found", conferenceSid)
+		return nil, notFoundError(model.SID(conferenceSid))
 	}
 
 	// Check if the call is a participant in this conference
@@ -1350,7 +1350,7 @@ func (e *EngineImpl) UpdateParticipant(conferenceSid string, callSid string, par
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	state.mu.Lock()
@@ -1365,7 +1365,7 @@ func (e *EngineImpl) UpdateParticipant(conferenceSid string, callSid string, par
 	}
 
 	if conf == nil {
-		return nil, fmt.Errorf("conference %s not found", conferenceSid)
+		return nil, notFoundError(model.SID(conferenceSid))
 	}
 
 	// Check if the call is a participant in this conference
@@ -1385,7 +1385,7 @@ func (e *EngineImpl) UpdateParticipant(conferenceSid string, callSid string, par
 	// Get the call for timeline events
 	call, exists := state.calls[callSIDModel]
 	if !exists {
-		return nil, fmt.Errorf("call %s not found", callSid)
+		return nil, notFoundError(callSIDModel)
 	}
 
 	// Get or create participant state for this (conference, call) pair
@@ -1556,7 +1556,7 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("subaccount %s not found", accountSID)
+		return nil, notFoundError(accountSID)
 	}
 
 	// Lock only this subaccount
@@ -1761,7 +1761,7 @@ func (e *EngineImpl) SetClockForAccount(accountSID model.SID, clock Clock) error
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("subaccount %s not found", accountSID)
+		return notFoundError(accountSID)
 	}
 
 	// Lock only this subaccount
@@ -1780,7 +1780,7 @@ func (e *EngineImpl) AdvanceForAccount(accountSID model.SID, d time.Duration) er
 	e.subAccountsMu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("subaccount %s not found", accountSID)
+		return notFoundError(accountSID)
 	}
 
 	// Lock only this subaccount
