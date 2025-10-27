@@ -1,4 +1,4 @@
-module twimulator
+module github.com/sprucehealth/twimulator
 
 go 1.25
 
