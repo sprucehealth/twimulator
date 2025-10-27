@@ -37,6 +37,7 @@ type accountView struct {
 	AuthToken    string
 	Numbers      []numberView
 	Applications []applicationView
+	Addresses    []addressView
 }
 
 type numberView struct {
@@ -46,6 +47,7 @@ type numberView struct {
 	ApplicationName string
 	CreatedAt       time.Time
 }
+
 type applicationView struct {
 	SID                  string
 	FriendlyName         string
@@ -54,6 +56,23 @@ type applicationView struct {
 	StatusCallback       string
 	StatusCallbackMethod string
 	CreatedAt            time.Time
+}
+
+type addressView struct {
+	SID              string
+	CustomerName     string
+	Street           string
+	StreetSecondary  string
+	City             string
+	Region           string
+	PostalCode       string
+	IsoCountry       string
+	FriendlyName     string
+	EmergencyEnabled bool
+	Validated        bool
+	Verified         bool
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // NewConsoleServer creates a new console server
@@ -86,6 +105,7 @@ func NewConsoleServer(e engine.Engine, addr string) (*ConsoleServer, error) {
 	mux.HandleFunc("/subaccounts/", cs.handleSubAccountDetail)
 	mux.HandleFunc("/calls/", cs.handleCallDetail)
 	mux.HandleFunc("/numbers/", cs.handleNumberDetail)
+	mux.HandleFunc("/addresses/", cs.handleAddressDetail)
 	mux.HandleFunc("/api/snapshot", cs.handleSnapshot)
 	mux.Handle("/static/", http.FileServer(http.FS(content)))
 
@@ -178,6 +198,27 @@ func (cs *ConsoleServer) handleSubAccounts(w http.ResponseWriter, r *http.Reques
 			numbers[idx] = viewNum
 		}
 		views[i].Numbers = numbers
+
+		addresses := make([]addressView, len(sa.Addresses))
+		for idx, addr := range sa.Addresses {
+			addresses[idx] = addressView{
+				SID:              string(addr.SID),
+				CustomerName:     addr.CustomerName,
+				Street:           addr.Street,
+				StreetSecondary:  addr.StreetSecondary,
+				City:             addr.City,
+				Region:           addr.Region,
+				PostalCode:       addr.PostalCode,
+				IsoCountry:       addr.IsoCountry,
+				FriendlyName:     addr.FriendlyName,
+				EmergencyEnabled: addr.EmergencyEnabled,
+				Validated:        addr.Validated,
+				Verified:         addr.Verified,
+				CreatedAt:        addr.CreatedAt,
+				UpdatedAt:        addr.UpdatedAt,
+			}
+		}
+		views[i].Addresses = addresses
 	}
 
 	sort.SliceStable(views, func(i, j int) bool {
@@ -269,6 +310,27 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 
 	view.Numbers = numbers
 
+	addresses := make([]addressView, len(subAccountModel.Addresses))
+	for idx, addr := range subAccountModel.Addresses {
+		addresses[idx] = addressView{
+			SID:              string(addr.SID),
+			CustomerName:     addr.CustomerName,
+			Street:           addr.Street,
+			StreetSecondary:  addr.StreetSecondary,
+			City:             addr.City,
+			Region:           addr.Region,
+			PostalCode:       addr.PostalCode,
+			IsoCountry:       addr.IsoCountry,
+			FriendlyName:     addr.FriendlyName,
+			EmergencyEnabled: addr.EmergencyEnabled,
+			Validated:        addr.Validated,
+			Verified:         addr.Verified,
+			CreatedAt:        addr.CreatedAt,
+			UpdatedAt:        addr.UpdatedAt,
+		}
+	}
+	view.Addresses = addresses
+
 	// Get calls for this account from the snapshot
 	calls := make([]*model.Call, 0, len(snap.Calls))
 	for _, call := range snap.Calls {
@@ -297,6 +359,7 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 		"SubAccount":   view,
 		"Applications": view.Applications,
 		"Numbers":      numbers,
+		"Addresses":    addresses,
 		"Calls":        calls,
 		"Queues":       queues,
 		"Conferences":  conferences,
@@ -427,6 +490,68 @@ func (cs *ConsoleServer) handleNumberDetail(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := cs.tmpl.ExecuteTemplate(w, "number.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (cs *ConsoleServer) handleAddressDetail(w http.ResponseWriter, r *http.Request) {
+	sid := strings.TrimPrefix(r.URL.Path, "/addresses/")
+	if sid == "" {
+		http.Error(w, "Address SID required", http.StatusBadRequest)
+		return
+	}
+
+	snaps := cs.engine.SnapshotAll()
+	var address addressView
+	var accountName string
+	found := false
+
+	for _, snap := range snaps {
+		for _, sa := range snap.SubAccounts {
+			for _, addr := range sa.Addresses {
+				if string(addr.SID) == sid {
+					address = addressView{
+						SID:              string(addr.SID),
+						CustomerName:     addr.CustomerName,
+						Street:           addr.Street,
+						StreetSecondary:  addr.StreetSecondary,
+						City:             addr.City,
+						Region:           addr.Region,
+						PostalCode:       addr.PostalCode,
+						IsoCountry:       addr.IsoCountry,
+						FriendlyName:     addr.FriendlyName,
+						EmergencyEnabled: addr.EmergencyEnabled,
+						Validated:        addr.Validated,
+						Verified:         addr.Verified,
+						CreatedAt:        addr.CreatedAt,
+						UpdatedAt:        addr.UpdatedAt,
+					}
+					accountName = sa.FriendlyName
+					found = true
+					break
+				}
+			}
+
+			if found {
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+
+	data := map[string]any{
+		"Address":     address,
+		"AccountName": accountName,
+	}
+
+	if err := cs.tmpl.ExecuteTemplate(w, "address.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

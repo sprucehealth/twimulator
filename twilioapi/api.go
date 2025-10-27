@@ -87,6 +87,15 @@ func (c *Client) CreateQueue(params *twilioopenapi.CreateQueueParams) (*twilioop
 	return c.engine.CreateQueue(params)
 }
 
+// CreateAddress creates an address for an account
+func (c *Client) CreateAddress(params *twilioopenapi.CreateAddressParams) (*twilioopenapi.ApiV2010Address, error) {
+	if params == nil {
+		params = &twilioopenapi.CreateAddressParams{}
+	}
+	params.PathAccountSid = &c.subaccountSID
+	return c.engine.CreateAddress(params)
+}
+
 // CreateCall creates a new call via the engine using Twilio's generated params
 func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error) {
 	if params == nil {

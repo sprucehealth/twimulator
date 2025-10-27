@@ -127,6 +127,7 @@ type SubAccount struct {
 	AuthToken       string           `json:"auth_token"`
 	IncomingNumbers []IncomingNumber `json:"incoming_numbers"`
 	Applications    []Application    `json:"applications"`
+	Addresses       []Address        `json:"addresses"`
 }
 
 // IncomingNumber represents a provisioned phone number
@@ -148,6 +149,25 @@ type Application struct {
 	CreatedAt            time.Time `json:"created_at"`
 }
 
+// Address represents a Twilio address resource
+type Address struct {
+	SID              SID       `json:"sid"`
+	AccountSID       SID       `json:"account_sid"`
+	CustomerName     string    `json:"customer_name"`
+	Street           string    `json:"street"`
+	StreetSecondary  string    `json:"street_secondary,omitempty"`
+	City             string    `json:"city"`
+	Region           string    `json:"region"`
+	PostalCode       string    `json:"postal_code"`
+	IsoCountry       string    `json:"iso_country"`
+	FriendlyName     string    `json:"friendly_name,omitempty"`
+	EmergencyEnabled bool      `json:"emergency_enabled"`
+	Validated        bool      `json:"validated"`
+	Verified         bool      `json:"verified"`
+	CreatedAt        time.Time `json:"date_created"`
+	UpdatedAt        time.Time `json:"date_updated"`
+}
+
 // SID generators with atomic counters for determinism
 var (
 	callCounter        uint64
@@ -157,6 +177,7 @@ var (
 	phoneNumberCounter uint64
 	applicationCounter uint64
 	recordingCounter   uint64
+	addressCounter     uint64
 )
 
 // NewCallSID generates a new Call SID (CAFAKE prefix, 34 chars total)
@@ -215,6 +236,14 @@ func NewRecordingSID() SID {
 	b := make([]byte, 7)
 	rand.Read(b)
 	return SID(fmt.Sprintf("REFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
+}
+
+// NewAddressSID generates a new Address SID (ADFAKE prefix, 34 chars total)
+func NewAddressSID() SID {
+	counter := atomic.AddUint64(&addressCounter, 1)
+	b := make([]byte, 7)
+	rand.Read(b)
+	return SID(fmt.Sprintf("ADFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
 }
 
 // NewAuthToken generates a pseudo-random auth token for subaccounts

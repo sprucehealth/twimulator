@@ -29,6 +29,7 @@ type Engine interface {
 	DeleteIncomingPhoneNumber(sid string, params *twilioopenapi.DeleteIncomingPhoneNumberParams) error
 	CreateApplication(params *twilioopenapi.CreateApplicationParams) (*twilioopenapi.ApiV2010Application, error)
 	CreateQueue(params *twilioopenapi.CreateQueueParams) (*twilioopenapi.ApiV2010Queue, error)
+	CreateAddress(params *twilioopenapi.CreateAddressParams) (*twilioopenapi.ApiV2010Address, error)
 
 	// Core lifecycle
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
@@ -95,6 +96,7 @@ type subAccountState struct {
 	// Resources scoped to this subaccount
 	incomingNumbers map[string]*incomingNumber
 	applications    map[model.SID]*applicationRecord
+	addresses       map[model.SID]*model.Address
 	calls           map[model.SID]*model.Call
 	queues          map[string]*model.Queue
 	conferences     map[string]*model.Conference
@@ -223,6 +225,7 @@ func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*
 		account:           subAccount,
 		incomingNumbers:   make(map[string]*incomingNumber),
 		applications:      make(map[model.SID]*applicationRecord),
+		addresses:         make(map[model.SID]*model.Address),
 		calls:             make(map[model.SID]*model.Call),
 		queues:            make(map[string]*model.Queue),
 		conferences:       make(map[string]*model.Conference),
@@ -883,6 +886,117 @@ func (e *EngineImpl) CreateQueue(params *twilioopenapi.CreateQueueParams) (*twil
 	return &twilioopenapi.ApiV2010Queue{
 		Sid:        &sidStr,
 		AccountSid: &accountSIDStr,
+	}, nil
+}
+
+// CreateAddress creates an address for an account
+func (e *EngineImpl) CreateAddress(params *twilioopenapi.CreateAddressParams) (*twilioopenapi.ApiV2010Address, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+
+	// Validate required parameters
+	if params.CustomerName == nil || *params.CustomerName == "" {
+		return nil, fmt.Errorf("CustomerName is required")
+	}
+	if params.Street == nil || *params.Street == "" {
+		return nil, fmt.Errorf("Street is required")
+	}
+	if params.City == nil || *params.City == "" {
+		return nil, fmt.Errorf("City is required")
+	}
+	if params.Region == nil || *params.Region == "" {
+		return nil, fmt.Errorf("Region is required")
+	}
+	if params.PostalCode == nil || *params.PostalCode == "" {
+		return nil, fmt.Errorf("PostalCode is required")
+	}
+	if params.IsoCountry == nil || *params.IsoCountry == "" {
+		return nil, fmt.Errorf("IsoCountry is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	now := state.clock.Now()
+	sid := model.NewAddressSID()
+
+	// Extract optional parameters
+	friendlyName := ""
+	if params.FriendlyName != nil {
+		friendlyName = *params.FriendlyName
+	}
+
+	streetSecondary := ""
+	if params.StreetSecondary != nil {
+		streetSecondary = *params.StreetSecondary
+	}
+
+	emergencyEnabled := false
+	if params.EmergencyEnabled != nil {
+		emergencyEnabled = *params.EmergencyEnabled
+	}
+
+	// AutoCorrectAddress defaults to true in Twilio
+	autoCorrectAddress := true
+	if params.AutoCorrectAddress != nil {
+		autoCorrectAddress = *params.AutoCorrectAddress
+	}
+
+	// Create the address
+	address := &model.Address{
+		SID:              sid,
+		AccountSID:       accountSID,
+		CustomerName:     *params.CustomerName,
+		Street:           *params.Street,
+		StreetSecondary:  streetSecondary,
+		City:             *params.City,
+		Region:           *params.Region,
+		PostalCode:       *params.PostalCode,
+		IsoCountry:       *params.IsoCountry,
+		FriendlyName:     friendlyName,
+		EmergencyEnabled: emergencyEnabled,
+		Validated:        autoCorrectAddress, // Simulate auto-correction as validation
+		Verified:         false,              // Addresses start unverified
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+
+	state.addresses[sid] = address
+
+	// Convert to Twilio API response format
+	sidStr := string(sid)
+	accountSIDStr := string(accountSID)
+	dateCreated := now.UTC().Format(time.RFC1123Z)
+	dateUpdated := now.UTC().Format(time.RFC1123Z)
+
+	return &twilioopenapi.ApiV2010Address{
+		Sid:              &sidStr,
+		AccountSid:       &accountSIDStr,
+		CustomerName:     params.CustomerName,
+		Street:           params.Street,
+		StreetSecondary:  &streetSecondary,
+		City:             params.City,
+		Region:           params.Region,
+		PostalCode:       params.PostalCode,
+		IsoCountry:       params.IsoCountry,
+		FriendlyName:     &friendlyName,
+		EmergencyEnabled: &emergencyEnabled,
+		Validated:        &autoCorrectAddress,
+		DateCreated:      &dateCreated,
+		DateUpdated:      &dateUpdated,
 	}, nil
 }
 
@@ -1613,6 +1727,12 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 		copy(apps, state.account.Applications)
 		saCopy.Applications = apps
 	}
+	// Copy addresses from state
+	addresses := make([]model.Address, 0, len(state.addresses))
+	for _, addr := range state.addresses {
+		addresses = append(addresses, *addr)
+	}
+	saCopy.Addresses = addresses
 	snap.SubAccounts[accountSID] = &saCopy
 
 	return snap, nil

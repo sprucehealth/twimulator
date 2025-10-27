@@ -113,6 +113,45 @@
                 {{end}}
             </section>
 
+            <!-- Addresses Section -->
+            <section class="resource-section">
+                <h3>Addresses</h3>
+                {{if .Addresses}}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>SID</th>
+                            <th>Friendly Name</th>
+                            <th>Customer Name</th>
+                            <th>Street</th>
+                            <th>City</th>
+                            <th>Region</th>
+                            <th>Country</th>
+                            <th>Emergency</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Addresses}}
+                        <tr>
+                            <td><a href="/addresses/{{.SID}}">{{.SID}}</a></td>
+                            <td>{{if .FriendlyName}}{{.FriendlyName}}{{else}}&mdash;{{end}}</td>
+                            <td>{{.CustomerName}}</td>
+                            <td>{{.Street}}{{if .StreetSecondary}}, {{.StreetSecondary}}{{end}}</td>
+                            <td>{{.City}}</td>
+                            <td>{{.Region}}</td>
+                            <td>{{.IsoCountry}}</td>
+                            <td>{{if .EmergencyEnabled}}Yes{{else}}No{{end}}</td>
+                            <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+                {{else}}
+                <p class="empty">No addresses yet.</p>
+                {{end}}
+            </section>
+
             <!-- Calls Section -->
             <section class="resource-section">
                 <h3>Calls</h3>

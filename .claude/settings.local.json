@@ -9,7 +9,9 @@
       "Bash(go run:*)",
       "WebFetch(domain:www.twilio.com)",
       "Bash(find:*)",
-      "Bash(engine/runner.go)"
+      "Bash(engine/runner.go)",
+      "WebSearch",
+      "WebFetch(domain:pkg.go.dev)"
     ],
     "deny": [],
     "ask": []

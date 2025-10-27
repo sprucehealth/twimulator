@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Address {{.Address.FriendlyName}} - Twimulator Console</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Twimulator Console</h1>
+            <nav>
+                <a href="/">SubAccounts</a>
+                <a href="/api/snapshot" target="_blank">API Snapshot</a>
+            </nav>
+        </header>
+
+        <main>
+            <div class="breadcrumb">
+                <a href="/">SubAccounts</a> &raquo; {{.AccountName}} &raquo; Address {{if .Address.FriendlyName}}{{.Address.FriendlyName}}{{else}}{{.Address.SID}}{{end}}
+            </div>
+
+            <section class="resource-section">
+                <h2>Address Details</h2>
+                <div class="detail-grid">
+                    <div class="detail-item">
+                        <label>SID</label>
+                        <div>{{.Address.SID}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Friendly Name</label>
+                        <div>{{if .Address.FriendlyName}}{{.Address.FriendlyName}}{{else}}<em>None</em>{{end}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Customer Name</label>
+                        <div>{{.Address.CustomerName}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Street</label>
+                        <div>{{.Address.Street}}</div>
+                    </div>
+                    {{if .Address.StreetSecondary}}
+                    <div class="detail-item">
+                        <label>Street Secondary</label>
+                        <div>{{.Address.StreetSecondary}}</div>
+                    </div>
+                    {{end}}
+                    <div class="detail-item">
+                        <label>City</label>
+                        <div>{{.Address.City}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Region</label>
+                        <div>{{.Address.Region}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Postal Code</label>
+                        <div>{{.Address.PostalCode}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Country (ISO)</label>
+                        <div>{{.Address.IsoCountry}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Emergency Enabled</label>
+                        <div>{{if .Address.EmergencyEnabled}}Yes{{else}}No{{end}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Validated</label>
+                        <div>{{if .Address.Validated}}Yes{{else}}No{{end}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Verified</label>
+                        <div>{{if .Address.Verified}}Yes{{else}}No{{end}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Created At</label>
+                        <div>{{.Address.CreatedAt.Format "2006-01-02 15:04:05 MST"}}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Updated At</label>
+                        <div>{{.Address.UpdatedAt.Format "2006-01-02 15:04:05 MST"}}</div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+</body>
+</html>

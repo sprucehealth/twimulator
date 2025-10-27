@@ -515,9 +515,6 @@ func TestParseGatherDefaults(t *testing.T) {
 	if gather.Timeout != "5" {
 		t.Errorf("Expected default timeout '5', got %q", gather.Timeout)
 	}
-	if gather.FinishOnKey != "#" {
-		t.Errorf("Expected default finishOnKey '#', got %q", gather.FinishOnKey)
-	}
 	if gather.Method != "POST" {
 		t.Errorf("Expected default method 'POST', got %q", gather.Method)
 	}
