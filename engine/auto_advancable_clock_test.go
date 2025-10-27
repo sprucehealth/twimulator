@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"twimulator/engine"
+	"github.com/sprucehealth/twimulator/engine"
 )
 
 func TestAutoAdvancableClock(t *testing.T) {

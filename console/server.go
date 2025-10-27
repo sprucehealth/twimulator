@@ -14,8 +14,8 @@ import (
 
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 
-	"twimulator/engine"
-	"twimulator/model"
+	"github.com/sprucehealth/twimulator/engine"
+	"github.com/sprucehealth/twimulator/model"
 )
 
 //go:embed templates/*.html static/*

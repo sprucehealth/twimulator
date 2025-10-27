@@ -5,8 +5,8 @@ import (
 
 	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
 
-	"twimulator/engine"
-	"twimulator/twilioapi"
+	"github.com/sprucehealth/twimulator/engine"
+	"github.com/sprucehealth/twimulator/twilioapi"
 )
 
 func TestCreateAddress(t *testing.T) {

@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"twimulator/model"
+	"github.com/sprucehealth/twimulator/model"
 
 	"github.com/twilio/twilio-go/client"
 )

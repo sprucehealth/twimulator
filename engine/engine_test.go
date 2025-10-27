@@ -10,9 +10,9 @@ import (
 
 	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
 
-	"twimulator/engine"
-	"twimulator/httpstub"
-	"twimulator/model"
+	"github.com/sprucehealth/twimulator/engine"
+	"github.com/sprucehealth/twimulator/httpstub"
+	"github.com/sprucehealth/twimulator/model"
 )
 
 func TestEnqueueAndConferenceFlow(t *testing.T) {

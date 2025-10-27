@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"twimulator/engine"
-	"twimulator/httpstub"
-	"twimulator/twiml"
+	"github.com/sprucehealth/twimulator/engine"
+	"github.com/sprucehealth/twimulator/httpstub"
+	"github.com/sprucehealth/twimulator/twiml"
 )
 
 // TestTwiMLSimpleComparison demonstrates the simplest way to compare TwiML:

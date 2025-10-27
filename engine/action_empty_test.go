@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"twimulator/engine"
-	"twimulator/httpstub"
-	"twimulator/model"
+	"github.com/sprucehealth/twimulator/engine"
+	"github.com/sprucehealth/twimulator/httpstub"
+	"github.com/sprucehealth/twimulator/model"
 )
 
 // TestGatherActionEmptyResponse verifies that when a Gather action callback

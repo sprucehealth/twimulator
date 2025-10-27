@@ -3,8 +3,8 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"github.com/sprucehealth/twimulator/model"
 	"net/url"
-	"twimulator/model"
 )
 
 var ErrNotFound = errors.New("not found")

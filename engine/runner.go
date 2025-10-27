@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"twimulator/model"
-	"twimulator/twiml"
+	"github.com/sprucehealth/twimulator/model"
+	"github.com/sprucehealth/twimulator/twiml"
 )
 
 // ErrCallHungup is returned when a Hangup verb is executed
@@ -349,11 +349,11 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 	}
 
 	r.addEvent("twiml.gather", map[string]any{
-		"input":        gather.Input,
-		"timeout":      timeout.Seconds(),
-		"num_digits":   gather.NumDigits,
+		"input":         gather.Input,
+		"timeout":       timeout.Seconds(),
+		"num_digits":    gather.NumDigits,
 		"finish_on_key": gather.FinishOnKey,
-		"action":       gather.Action,
+		"action":        gather.Action,
 	})
 
 	r.state.mu.Lock()

@@ -12,8 +12,8 @@ import (
 
 	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
 
-	"twimulator/httpstub"
-	"twimulator/model"
+	"github.com/sprucehealth/twimulator/httpstub"
+	"github.com/sprucehealth/twimulator/model"
 )
 
 var _ Engine = &EngineImpl{}
