@@ -262,6 +262,8 @@ func parseDial(decoder *xml.Decoder, start *xml.StartElement) (*Dial, error) {
 			if n, err := strconv.Atoi(attr.Value); err == nil {
 				dial.Timeout = time.Duration(n) * time.Second
 			}
+		case "hangupOnStar":
+			dial.HangupOnStar = attr.Value == "true"
 		default:
 			if attr.Value != "" {
 				return nil, fmt.Errorf("unknown attribute '%s' on <Dial>", attr.Name.Local)

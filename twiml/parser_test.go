@@ -159,6 +159,52 @@ func TestParseDialConference(t *testing.T) {
 	}
 }
 
+func TestParseDialHangupOnStar(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial hangupOnStar="true">+15551234567</Dial>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	dial, ok := resp.Children[0].(*Dial)
+	if !ok {
+		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+	}
+
+	if !dial.HangupOnStar {
+		t.Error("Expected HangupOnStar to be true")
+	}
+
+	if dial.Number != "+15551234567" {
+		t.Errorf("Expected number, got %q", dial.Number)
+	}
+}
+
+func TestParseDialHangupOnStarDefault(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>+15551234567</Dial>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	dial, ok := resp.Children[0].(*Dial)
+	if !ok {
+		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+	}
+
+	if dial.HangupOnStar {
+		t.Error("Expected HangupOnStar to be false by default")
+	}
+}
+
 func TestParseEnqueue(t *testing.T) {
 	xml := `<?xml version="1.0" encoding="UTF-8"?>
 <Response>

@@ -530,6 +530,7 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 	r.addEvent("dial.queue.bridging", map[string]any{
 		"queue":           dial.Queue,
 		"target_call_sid": targetCallSID,
+		"hangupOnStar":    dial.HangupOnStar,
 	})
 
 	// Get the target call's runner to dequeue it
@@ -555,16 +556,35 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 		}
 	}
 
-	// Simulate bridge duration - wait until either call hangs up
-	dialDuration := 0
-	select {
-	case <-ctx.Done():
-	case <-r.hangupCh:
-	case <-r.clock.After(dial.Timeout):
-		// Bridge timeout
-		dialDuration = int(dial.Timeout.Seconds())
+	// Bridge is established - wait until either call hangs up (no timeout during bridge)
+	var dialDuration int
+	if dial.HangupOnStar {
+		// Listen for star key to hangup during bridge
+		for {
+			select {
+			case <-ctx.Done():
+				goto bridgeEnded
+			case <-r.hangupCh:
+				goto bridgeEnded
+			case digits := <-r.gatherCh:
+				// Check if star is pressed
+				if strings.Contains(digits, "*") {
+					r.addEvent("dial.hangup_on_star", map[string]any{
+						"digits": digits,
+					})
+					return r.executeHangup(false)
+				}
+			}
+		}
+	} else {
+		// Wait for bridge to end (no timeout)
+		select {
+		case <-ctx.Done():
+		case <-r.hangupCh:
+		}
 	}
 
+bridgeEnded:
 	endTime := r.clock.Now()
 	dialDuration = int(endTime.Sub(startTime).Seconds())
 	targetQueueTime := 0
@@ -607,8 +627,9 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	r.state.mu.Unlock()
 
 	r.addEvent("dial.queue.joined", map[string]any{
-		"queue":     dial.Queue,
-		"queue_sid": queueSID,
+		"queue":        dial.Queue,
+		"queue_sid":    queueSID,
+		"hangupOnStar": dial.HangupOnStar,
 	})
 
 	// Dial Queue has a timeout (unlike Enqueue which waits indefinitely)
@@ -616,31 +637,78 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	dialStatus := ""
 	queueResult := ""
 	urlUpdated := false
-	select {
-	case <-ctx.Done():
-		dialStatus = "canceled"
-		queueResult = "system-shutdown"
-	case <-r.hangupCh:
-		dialStatus = "canceled"
-		queueResult = "hangup"
-	case <-r.urlUpdateCh:
-		dialStatus = "canceled"
-		queueResult = "url-updated"
-		urlUpdated = true
-		r.addEvent("dial.queue.interrupted", map[string]any{"reason": "url_updated"})
-	case result := <-r.dequeueCh:
-		dialStatus = "completed"
-		queueResult = result
-	case <-r.clock.After(dial.Timeout):
-		dialStatus = "no-answer"
-		queueResult = "timeout"
-		r.addEvent("dial.queue.timeout", map[string]any{})
+	if dial.HangupOnStar {
+		// Listen for star key to hangup
+		for {
+			select {
+			case <-ctx.Done():
+				dialStatus = "canceled"
+				queueResult = "system-shutdown"
+				goto queueLeft
+			case <-r.hangupCh:
+				dialStatus = "canceled"
+				queueResult = "hangup"
+				goto queueLeft
+			case <-r.urlUpdateCh:
+				dialStatus = "canceled"
+				queueResult = "url-updated"
+				urlUpdated = true
+				r.addEvent("dial.queue.interrupted", map[string]any{"reason": "url_updated"})
+				goto queueLeft
+			case result := <-r.dequeueCh:
+				dialStatus = "completed"
+				queueResult = result
+				goto queueLeft
+			case <-r.clock.After(dial.Timeout):
+				dialStatus = "no-answer"
+				queueResult = "timeout"
+				r.addEvent("dial.queue.timeout", map[string]any{})
+				goto queueLeft
+			case digits := <-r.gatherCh:
+				// Check if star is pressed
+				if strings.Contains(digits, "*") {
+					r.addEvent("dial.hangup_on_star", map[string]any{
+						"digits": digits,
+					})
+					// Clean up before hanging up
+					r.state.mu.Lock()
+					r.removeFromQueue(queue)
+					r.call.CurrentEndpoint = ""
+					r.state.mu.Unlock()
+					return r.executeHangup(false)
+				}
+			}
+		}
+	} else {
+		select {
+		case <-ctx.Done():
+			dialStatus = "canceled"
+			queueResult = "system-shutdown"
+		case <-r.hangupCh:
+			dialStatus = "canceled"
+			queueResult = "hangup"
+		case <-r.urlUpdateCh:
+			dialStatus = "canceled"
+			queueResult = "url-updated"
+			urlUpdated = true
+			r.addEvent("dial.queue.interrupted", map[string]any{"reason": "url_updated"})
+		case result := <-r.dequeueCh:
+			dialStatus = "completed"
+			queueResult = result
+		case <-r.clock.After(dial.Timeout):
+			dialStatus = "no-answer"
+			queueResult = "timeout"
+			r.addEvent("dial.queue.timeout", map[string]any{})
+		}
 	}
 
-	// Calculate time in queue
-	r.state.mu.Lock()
+queueLeft:
+
+	// Calculate time in queue (time waiting before bridge)
 	endTime := r.clock.Now()
 	queueTime := int(endTime.Sub(startTime).Seconds())
+
+	r.state.mu.Lock()
 	r.removeFromQueue(queue)
 	r.call.CurrentEndpoint = ""
 	r.state.mu.Unlock()
@@ -652,6 +720,58 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 		"queue_time":   queueTime,
 	})
 
+	// If bridged, wait for bridge to complete before calling action
+	// Per Twilio behavior: Dial action is called when the call ends, not when connection starts
+	dialDuration := 0
+	if queueResult == "bridged" {
+		bridgeStartTime := r.clock.Now()
+		r.addEvent("dial.queue.bridge_started", map[string]any{
+			"queue": dial.Queue,
+		})
+
+		// Wait for bridge to complete (no timeout during bridge)
+		if dial.HangupOnStar {
+			// Listen for star key to hangup during bridge
+			for {
+				select {
+				case <-ctx.Done():
+					goto bridgeEnded
+				case <-r.hangupCh:
+					goto bridgeEnded
+				case <-r.urlUpdateCh:
+					urlUpdated = true
+					r.addEvent("dial.queue.bridge_interrupted", map[string]any{"reason": "url_updated"})
+					goto bridgeEnded
+				case digits := <-r.gatherCh:
+					// Check if star is pressed
+					if strings.Contains(digits, "*") {
+						r.addEvent("dial.hangup_on_star", map[string]any{
+							"digits": digits,
+						})
+						return r.executeHangup(false)
+					}
+				}
+			}
+		} else {
+			select {
+			case <-ctx.Done():
+			case <-r.hangupCh:
+			case <-r.urlUpdateCh:
+				urlUpdated = true
+				r.addEvent("dial.queue.bridge_interrupted", map[string]any{"reason": "url_updated"})
+			}
+		}
+
+	bridgeEnded:
+		bridgeEndTime := r.clock.Now()
+		dialDuration = int(bridgeEndTime.Sub(bridgeStartTime).Seconds())
+
+		r.addEvent("dial.queue.bridge_completed", map[string]any{
+			"queue":         dial.Queue,
+			"dial_duration": dialDuration,
+		})
+	}
+
 	// If URL was updated, skip action callback entirely
 	if urlUpdated {
 		return ErrURLUpdated
@@ -660,7 +780,7 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	// Call action callback with dial results
 	form := url.Values{}
 	form.Set("DialCallStatus", dialStatus)
-	form.Set("DialCallDuration", "0") // Duration of the dialed leg (0 for queue timeout)
+	form.Set("DialCallDuration", fmt.Sprintf("%d", dialDuration))
 	form.Set("QueueResult", queueResult)
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
@@ -694,19 +814,47 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 	r.state.mu.Unlock()
 
 	r.addEvent("joined.conference", map[string]any{
-		"conference": dial.Conference,
-		"sid":        conf.SID,
+		"conference":   dial.Conference,
+		"sid":          conf.SID,
+		"hangupOnStar": dial.HangupOnStar,
 	})
 
 	// Wait until hangup
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-r.hangupCh:
-		r.state.mu.Lock()
-		r.removeFromConference(conf)
-		r.state.mu.Unlock()
-		return nil
+	if dial.HangupOnStar {
+		// Listen for star key to hangup
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-r.hangupCh:
+				r.state.mu.Lock()
+				r.removeFromConference(conf)
+				r.state.mu.Unlock()
+				return nil
+			case digits := <-r.gatherCh:
+				// Check if star is pressed
+				if strings.Contains(digits, "*") {
+					r.addEvent("dial.hangup_on_star", map[string]any{
+						"digits": digits,
+					})
+					// Clean up before hanging up
+					r.state.mu.Lock()
+					r.removeFromConference(conf)
+					r.state.mu.Unlock()
+					return r.executeHangup(false)
+				}
+			}
+		}
+	} else {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.hangupCh:
+			r.state.mu.Lock()
+			r.removeFromConference(conf)
+			r.state.mu.Unlock()
+			return nil
+		}
 	}
 }
 
@@ -718,18 +866,42 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial) er
 	}
 
 	r.addEvent("dial.number", map[string]any{
-		"target":  target,
-		"timeout": dial.Timeout.Seconds(),
+		"target":        target,
+		"timeout":       dial.Timeout.Seconds(),
+		"hangupOnStar":  dial.HangupOnStar,
 	})
 
 	// For MVP, just simulate the dial
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-r.hangupCh:
-		return nil
-	case <-r.clock.After(dial.Timeout):
-		r.addEvent("dial.no_answer", map[string]any{})
+	if dial.HangupOnStar {
+		// Listen for star key to hangup
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-r.hangupCh:
+				return nil
+			case <-r.clock.After(dial.Timeout):
+				r.addEvent("dial.no_answer", map[string]any{})
+				return nil
+			case digits := <-r.gatherCh:
+				// Check if star is pressed
+				if strings.Contains(digits, "*") {
+					r.addEvent("dial.hangup_on_star", map[string]any{
+						"digits": digits,
+					})
+					return r.executeHangup(false)
+				}
+			}
+		}
+	} else {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.hangupCh:
+			return nil
+		case <-r.clock.After(dial.Timeout):
+			r.addEvent("dial.no_answer", map[string]any{})
+		}
 	}
 
 	return nil
@@ -958,10 +1130,11 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 		queueResult = result
 	}
 
-	// Calculate time in queue
-	r.state.mu.Lock()
+	// Calculate time in queue (time waiting before bridge)
 	endTime := r.clock.Now()
 	queueTime := int(endTime.Sub(startTime).Seconds())
+
+	r.state.mu.Lock()
 	r.removeFromQueue(queue)
 	r.call.CurrentEndpoint = ""
 	r.state.mu.Unlock()
@@ -971,6 +1144,33 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 		"queue_result": queueResult,
 		"queue_time":   queueTime,
 	})
+
+	// If dequeued via Dial (bridged), wait for bridge to complete before calling action
+	// Per Twilio docs: "the action URL is hit once when the bridged parties disconnect"
+	if queueResult == "bridged" {
+		bridgeStartTime := r.clock.Now()
+		r.addEvent("enqueue.bridge_started", map[string]any{
+			"queue": enqueue.Name,
+		})
+
+		// Wait for bridge to complete
+		select {
+		case <-ctx.Done():
+		case <-r.hangupCh:
+		case <-r.urlUpdateCh:
+			urlUpdated = true
+			r.addEvent("enqueue.bridge_interrupted", map[string]any{"reason": "url_updated"})
+		}
+
+		bridgeEndTime := r.clock.Now()
+		bridgeDuration := int(bridgeEndTime.Sub(bridgeStartTime).Seconds())
+
+		r.addEvent("enqueue.bridge_completed", map[string]any{
+			"queue":           enqueue.Name,
+			"bridge_duration": bridgeDuration,
+		})
+	}
+
 	// Call action callback with queue results
 	form := url.Values{}
 	form.Set("QueueResult", queueResult)
