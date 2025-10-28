@@ -264,6 +264,28 @@ func parseDial(decoder *xml.Decoder, start *xml.StartElement) (*Dial, error) {
 			}
 		case "hangupOnStar":
 			dial.HangupOnStar = attr.Value == "true"
+		case "record":
+			// Handle backward compatibility: true -> record-from-answer, false -> do-not-record
+			if attr.Value == "true" {
+				dial.Record = "record-from-answer"
+			} else if attr.Value == "false" {
+				dial.Record = "do-not-record"
+			} else {
+				// Validate the record value
+				validRecordValues := map[string]bool{
+					"do-not-record":           true,
+					"record-from-answer":      true,
+					"record-from-ringing":     true,
+					"record-from-answer-dual": true,
+					"record-from-ringing-dual": true,
+				}
+				if !validRecordValues[attr.Value] {
+					return nil, fmt.Errorf("invalid record value '%s': must be do-not-record, record-from-answer, record-from-ringing, record-from-answer-dual, record-from-ringing-dual, true, or false", attr.Value)
+				}
+				dial.Record = attr.Value
+			}
+		case "recordingStatusCallback":
+			dial.RecordingStatusCallback = attr.Value
 		default:
 			if attr.Value != "" {
 				return nil, fmt.Errorf("unknown attribute '%s' on <Dial>", attr.Name.Local)

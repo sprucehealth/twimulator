@@ -57,15 +57,17 @@ func (Gather) isNode() {}
 
 // Dial connects to another party
 type Dial struct {
-	Number       string
-	Client       string
-	Queue        string
-	Conference   string
-	Action       string
-	Method       string
-	Timeout      time.Duration
-	HangupOnStar bool
-	Children     []Node // For nested <Number>, <Client>, <Queue>, <Conference>
+	Number                 string
+	Client                 string
+	Queue                  string
+	Conference             string
+	Action                 string
+	Method                 string
+	Timeout                time.Duration
+	HangupOnStar           bool
+	Record                 string // "do-not-record", "record-from-answer", "record-from-ringing", "record-from-answer-dual", "record-from-ringing-dual"
+	RecordingStatusCallback string
+	Children               []Node // For nested <Number>, <Client>, <Queue>, <Conference>
 }
 
 func (Dial) isNode() {}

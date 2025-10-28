@@ -205,6 +205,150 @@ func TestParseDialHangupOnStarDefault(t *testing.T) {
 	}
 }
 
+func TestParseDialRecord(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial record="record-from-answer">+15551234567</Dial>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	dial, ok := resp.Children[0].(*Dial)
+	if !ok {
+		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+	}
+
+	if dial.Record != "record-from-answer" {
+		t.Errorf("Expected record 'record-from-answer', got %q", dial.Record)
+	}
+}
+
+func TestParseDialRecordAllValues(t *testing.T) {
+	validValues := []string{
+		"do-not-record",
+		"record-from-answer",
+		"record-from-ringing",
+		"record-from-answer-dual",
+		"record-from-ringing-dual",
+	}
+
+	for _, value := range validValues {
+		xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial record="` + value + `">+15551234567</Dial>
+</Response>`
+
+		resp, err := Parse([]byte(xml))
+		if err != nil {
+			t.Fatalf("Parse error for record value '%s': %v", value, err)
+		}
+
+		dial, ok := resp.Children[0].(*Dial)
+		if !ok {
+			t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+		}
+
+		if dial.Record != value {
+			t.Errorf("Expected record '%s', got %q", value, dial.Record)
+		}
+	}
+}
+
+func TestParseDialRecordBackwardCompatibility(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		expected string
+	}{
+		{"true maps to record-from-answer", "true", "record-from-answer"},
+		{"false maps to do-not-record", "false", "do-not-record"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial record="` + tt.value + `">+15551234567</Dial>
+</Response>`
+
+			resp, err := Parse([]byte(xml))
+			if err != nil {
+				t.Fatalf("Parse error: %v", err)
+			}
+
+			dial, ok := resp.Children[0].(*Dial)
+			if !ok {
+				t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+			}
+
+			if dial.Record != tt.expected {
+				t.Errorf("Expected record '%s', got %q", tt.expected, dial.Record)
+			}
+		})
+	}
+}
+
+func TestParseDialRecordInvalid(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial record="invalid-value">+15551234567</Dial>
+</Response>`
+
+	_, err := Parse([]byte(xml))
+	if err == nil {
+		t.Error("Expected error for invalid record value, got none")
+	}
+}
+
+func TestParseDialRecordingStatusCallback(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial record="record-from-answer" recordingStatusCallback="http://example.com/recording">+15551234567</Dial>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	dial, ok := resp.Children[0].(*Dial)
+	if !ok {
+		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+	}
+
+	if dial.Record != "record-from-answer" {
+		t.Errorf("Expected record 'record-from-answer', got %q", dial.Record)
+	}
+
+	if dial.RecordingStatusCallback != "http://example.com/recording" {
+		t.Errorf("Expected recordingStatusCallback URL, got %q", dial.RecordingStatusCallback)
+	}
+}
+
+func TestParseDialRecordDefault(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>+15551234567</Dial>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	dial, ok := resp.Children[0].(*Dial)
+	if !ok {
+		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+	}
+
+	if dial.Record != "" {
+		t.Errorf("Expected record to be empty by default, got %q", dial.Record)
+	}
+}
+
 func TestParseEnqueue(t *testing.T) {
 	xml := `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
