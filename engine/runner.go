@@ -797,12 +797,6 @@ queueLeft:
 			"dial_duration": dialDuration,
 		})
 	}
-
-	// If URL was updated, skip action callback entirely
-	if urlUpdated {
-		return ErrURLUpdated
-	}
-
 	// Call action callback with dial results
 	form := url.Values{}
 	form.Set("DialCallStatus", dialStatus)
@@ -811,10 +805,16 @@ queueLeft:
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
 
+	// If URL was updated, skip action callback entirely
+	if urlUpdated {
+		_ = r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL, true)
+		return ErrURLUpdated
+	}
+
 	return r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL, false)
 }
 
-func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial, conferenceDial *twiml.ConferenceDial, documentURL string) error {
+func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial, conferenceDial *twiml.ConferenceDial, currentTwimlDocumentURL string) error {
 	conf := r.engine.getOrCreateConference(r.call.AccountSID, conferenceDial.Name)
 
 	r.state.mu.Lock()
@@ -846,7 +846,7 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 	})
 
 	// Wait until hangup or leave conference
-	leftConference := false
+	urlUpdated := false
 	if dial.HangupOnStar {
 		// Listen for star key to leave conference
 		for {
@@ -855,12 +855,16 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 				r.state.mu.Lock()
 				r.removeFromConference(conf)
 				r.state.mu.Unlock()
-				return ctx.Err()
+				goto conferenceEnded
 			case <-r.hangupCh:
 				r.state.mu.Lock()
 				r.removeFromConference(conf)
 				r.state.mu.Unlock()
-				return nil
+				goto conferenceEnded
+			case <-r.urlUpdateCh:
+				urlUpdated = true
+				r.addEvent("dial.conference.interrupted", map[string]any{"reason": "url_updated"})
+				goto conferenceEnded
 			case digits := <-r.gatherCh:
 				// Check if star is pressed by caller to leave conference
 				if strings.Contains(digits, "*") {
@@ -870,7 +874,6 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 					r.state.mu.Lock()
 					r.removeFromConference(conf)
 					r.state.mu.Unlock()
-					leftConference = true
 					goto conferenceEnded
 				}
 			}
@@ -881,21 +884,33 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 			r.state.mu.Lock()
 			r.removeFromConference(conf)
 			r.state.mu.Unlock()
-			return ctx.Err()
+			goto conferenceEnded
 		case <-r.hangupCh:
 			r.state.mu.Lock()
 			r.removeFromConference(conf)
 			r.state.mu.Unlock()
-			return nil
+			goto conferenceEnded
+		case <-r.urlUpdateCh:
+			urlUpdated = true
+			r.addEvent("dial.conference.interrupted", map[string]any{"reason": "url_updated"})
+			goto conferenceEnded
 		}
 	}
-
 conferenceEnded:
-	// If left conference due to star, continue with call (no action callback for conference)
-	if leftConference {
-		return nil
+	// Call action callback
+	r.state.mu.RLock()
+	form := url.Values{}
+	form.Set("DialCallStatus", "answered")
+	form.Set("DialBridged", "true")
+	form.Set("ConferenceSid", conf.SID.String())
+	form.Set("FriendlyName", conf.Name)
+	form.Set("ConferenceStatus", string(conf.Status))
+	r.state.mu.RUnlock()
+	if urlUpdated {
+		_ = r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL, true)
+		return ErrURLUpdated
 	}
-	return nil
+	return r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL, false)
 }
 
 func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, numbers []*twiml.Number, clients []*twiml.Client, sips []*twiml.Sip) error {
@@ -1422,6 +1437,15 @@ func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string
 	if err != nil {
 		return err
 	}
+	// clear collected digits to avoid sending them again
+	r.state.mu.RLock()
+	digits := r.call.Variables["Digits"]
+	r.state.mu.RUnlock()
+	if digits != "" {
+		r.state.mu.Lock()
+		r.call.Variables["Digits"] = ""
+		r.state.mu.Unlock()
+	}
 
 	if skipTwimlExecution {
 		return nil
@@ -1433,16 +1457,6 @@ func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string
 			"url":     resolvedURL,
 		})
 		return r.executeHangup(true)
-	}
-	// clear collected digits to avoid sending them again
-
-	r.state.mu.RLock()
-	digits := r.call.Variables["Digits"]
-	r.state.mu.RUnlock()
-	if digits != "" {
-		r.state.mu.Lock()
-		r.call.Variables["Digits"] = ""
-		r.state.mu.Unlock()
 	}
 
 	return r.executeTwiML(ctx, resp, resolvedURL)
