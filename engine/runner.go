@@ -477,30 +477,60 @@ gatherComplete:
 
 func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentTwimlDocumentURL string) error {
 	r.trackTwiML(dial)
+
+	var queueDial *twiml.QueueDial
+	var conferenceDial *twiml.ConferenceDial
+	var numbers []*twiml.Number
+	var clients []*twiml.Client
+	var sips []*twiml.Sip
+	for _, child := range dial.Children {
+		switch n := child.(type) {
+		case *twiml.Number:
+			numbers = append(numbers, n)
+		case *twiml.Client:
+			clients = append(clients, n)
+		case *twiml.Sip:
+			sips = append(sips, n)
+		case *twiml.QueueDial:
+			if queueDial != nil {
+				return fmt.Errorf("dial cannot contain more than one queue")
+			}
+			queueDial = n
+		case *twiml.ConferenceDial:
+			if conferenceDial != nil {
+				return fmt.Errorf("dial cannot contain more than one conference")
+			}
+			conferenceDial = n
+		}
+	}
+	if queueDial != nil && conferenceDial != nil {
+		return fmt.Errorf("dial cannot contain both queue and conference")
+	}
+
 	r.addEvent("twiml.dial", map[string]any{
-		"number":     dial.Number,
-		"client":     dial.Client,
-		"queue":      dial.Queue,
-		"conference": dial.Conference,
+		"number":     numbers,
+		"client":     clients,
+		"queue":      queueDial,
+		"conference": conferenceDial,
 		"timeout":    dial.Timeout.Seconds(),
 	})
 
 	// Handle different dial targets
-	if dial.Queue != "" {
-		return r.executeDialQueue(ctx, dial, currentTwimlDocumentURL)
+	if queueDial != nil {
+		return r.executeDialQueue(ctx, dial, queueDial, currentTwimlDocumentURL)
 	}
-	if dial.Conference != "" {
-		return r.executeDialConference(ctx, dial)
+	if conferenceDial != nil {
+		return r.executeDialConference(ctx, dial, conferenceDial, currentTwimlDocumentURL)
 	}
-	if dial.Number != "" || dial.Client != "" {
-		return r.executeDialNumber(ctx, dial)
+	if len(numbers) > 0 || len(clients) > 0 || len(sips) > 0 {
+		return r.executeDialNumber(ctx, dial, numbers, clients, sips)
 	}
 
 	return nil
 }
 
-func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial, currentTwimlDocumentURL string) error {
-	queue := r.engine.getOrCreateQueue(r.call.AccountSID, dial.Queue)
+func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial, queueDial *twiml.QueueDial, currentTwimlDocumentURL string) error {
+	queue := r.engine.getOrCreateQueue(r.call.AccountSID, queueDial.Name)
 	queueSID := queue.SID
 
 	// Check if there are waiting members to connect to
@@ -528,7 +558,7 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 	startTime := r.clock.Now()
 
 	r.addEvent("dial.queue.bridging", map[string]any{
-		"queue":           dial.Queue,
+		"queue":           queue.Name,
 		"target_call_sid": targetCallSID,
 		"hangupOnStar":    dial.HangupOnStar,
 	})
@@ -593,7 +623,7 @@ bridgeEnded:
 	}
 
 	r.addEvent("dial.queue.left", map[string]any{
-		"queue":             dial.Queue,
+		"queue":             queue.Name,
 		"target_call_sid":   targetCallSID,
 		"dial_duration":     dialDuration,
 		"target_queue_time": targetQueueTime,
@@ -623,11 +653,11 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 		map[string]any{"call_sid": r.call.SID},
 	))
 
-	r.call.CurrentEndpoint = "queue:" + dial.Queue
+	r.call.CurrentEndpoint = "queue:" + queue.Name
 	r.state.mu.Unlock()
 
 	r.addEvent("dial.queue.joined", map[string]any{
-		"queue":        dial.Queue,
+		"queue":        queue.Name,
 		"queue_sid":    queueSID,
 		"hangupOnStar": dial.HangupOnStar,
 	})
@@ -710,7 +740,7 @@ queueLeft:
 	r.state.mu.Unlock()
 
 	r.addEvent("dial.queue.left", map[string]any{
-		"queue":        dial.Queue,
+		"queue":        queue.Name,
 		"dial_status":  dialStatus,
 		"queue_result": queueResult,
 		"queue_time":   queueTime,
@@ -722,7 +752,7 @@ queueLeft:
 	if queueResult == "bridged" {
 		bridgeStartTime := r.clock.Now()
 		r.addEvent("dial.queue.bridge_started", map[string]any{
-			"queue": dial.Queue,
+			"queue": queue.Name,
 		})
 
 		// Wait for bridge to complete (no timeout during bridge)
@@ -763,7 +793,7 @@ queueLeft:
 		dialDuration = int(bridgeEndTime.Sub(bridgeStartTime).Seconds())
 
 		r.addEvent("dial.queue.bridge_completed", map[string]any{
-			"queue":         dial.Queue,
+			"queue":         queue.Name,
 			"dial_duration": dialDuration,
 		})
 	}
@@ -784,8 +814,8 @@ queueLeft:
 	return r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL, false)
 }
 
-func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial) error {
-	conf := r.engine.getOrCreateConference(r.call.AccountSID, dial.Conference)
+func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial, conferenceDial *twiml.ConferenceDial, documentURL string) error {
+	conf := r.engine.getOrCreateConference(r.call.AccountSID, conferenceDial.Name)
 
 	r.state.mu.Lock()
 	// Add participant
@@ -806,21 +836,25 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 		))
 	}
 
-	r.call.CurrentEndpoint = "conference:" + dial.Conference
+	r.call.CurrentEndpoint = "conference:" + conferenceDial.Name
 	r.state.mu.Unlock()
 
 	r.addEvent("joined.conference", map[string]any{
-		"conference":   dial.Conference,
+		"conference":   conferenceDial.Name,
 		"sid":          conf.SID,
 		"hangupOnStar": dial.HangupOnStar,
 	})
 
-	// Wait until hangup
+	// Wait until hangup or leave conference
+	leftConference := false
 	if dial.HangupOnStar {
-		// Listen for star key to hangup
+		// Listen for star key to leave conference
 		for {
 			select {
 			case <-ctx.Done():
+				r.state.mu.Lock()
+				r.removeFromConference(conf)
+				r.state.mu.Unlock()
 				return ctx.Err()
 			case <-r.hangupCh:
 				r.state.mu.Lock()
@@ -828,7 +862,7 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 				r.state.mu.Unlock()
 				return nil
 			case digits := <-r.gatherCh:
-				// Check if star is pressed
+				// Check if star is pressed by caller to leave conference
 				if strings.Contains(digits, "*") {
 					r.addEvent("dial.hangup_on_star", map[string]any{
 						"digits": digits,
@@ -836,13 +870,17 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 					r.state.mu.Lock()
 					r.removeFromConference(conf)
 					r.state.mu.Unlock()
-					return nil
+					leftConference = true
+					goto conferenceEnded
 				}
 			}
 		}
 	} else {
 		select {
 		case <-ctx.Done():
+			r.state.mu.Lock()
+			r.removeFromConference(conf)
+			r.state.mu.Unlock()
 			return ctx.Err()
 		case <-r.hangupCh:
 			r.state.mu.Lock()
@@ -851,17 +889,21 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 			return nil
 		}
 	}
+
+conferenceEnded:
+	// If left conference due to star, continue with call (no action callback for conference)
+	if leftConference {
+		return nil
+	}
+	return nil
 }
 
-func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial) error {
-	// Create a child call leg
-	target := dial.Number
-	if dial.Client != "" {
-		target = "client:" + dial.Client
-	}
-
+func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, numbers []*twiml.Number, clients []*twiml.Client, sips []*twiml.Sip) error {
+	// Create child call leg
 	r.addEvent("dial.number", map[string]any{
-		"target":       target,
+		"numbers":      numbers,
+		"clients":      clients,
+		"sips":         sips,
 		"timeout":      dial.Timeout.Seconds(),
 		"hangupOnStar": dial.HangupOnStar,
 	})

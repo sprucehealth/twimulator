@@ -96,8 +96,15 @@ func TestParseDialNumber(t *testing.T) {
 		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
 	}
 
-	if dial.Number != "+15551234567" {
-		t.Errorf("Expected number, got %q", dial.Number)
+	if dial.Children == nil || len(dial.Children) != 1 {
+		t.Fatal("Expected Number to be set")
+	}
+	number, ok := dial.Children[0].(*Number)
+	if !ok {
+		t.Fatalf("Expected *Number, got %T", dial.Children[0])
+	}
+	if number.Number != "+15551234567" {
+		t.Errorf("Expected number, got %q", number.Number)
 	}
 }
 
@@ -116,9 +123,15 @@ func TestParseDialQueue(t *testing.T) {
 	if !ok {
 		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
 	}
-
-	if dial.Queue != "support" {
-		t.Errorf("Expected queue 'support', got %q", dial.Queue)
+	if dial.Children == nil || len(dial.Children) != 1 {
+		t.Fatal("Expected QueueDial to be set")
+	}
+	queue, ok := dial.Children[0].(*QueueDial)
+	if !ok {
+		t.Fatalf("Expected *QueueDial, got %T", dial.Children[0])
+	}
+	if queue.Name != "support" {
+		t.Errorf("Expected queue 'support', got %q", queue.Name)
 	}
 }
 
@@ -137,9 +150,16 @@ func TestParseDialConference(t *testing.T) {
 	if !ok {
 		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
 	}
+	if dial.Children == nil || len(dial.Children) != 1 {
+		t.Fatal("Expected Conference to be set")
+	}
+	dialCnf, ok := dial.Children[0].(*ConferenceDial)
+	if !ok {
+		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+	}
 
-	if dial.Conference != "my-room" {
-		t.Errorf("Expected conference 'my-room', got %q", dial.Conference)
+	if dialCnf.Name != "my-room" {
+		t.Errorf("Expected conference 'my-room', got %q", dialCnf.Name)
 	}
 
 	if len(dial.Children) != 1 {
@@ -156,6 +176,207 @@ func TestParseDialConference(t *testing.T) {
 	}
 	if conf.EndConferenceOnExit {
 		t.Error("Expected EndConferenceOnExit false")
+	}
+
+	// Verify dial.ConferenceDial points to the same object
+	if dialCnf != conf {
+		t.Error("Expected dial.ConferenceDial to point to same object as in Children")
+	}
+
+	if !dialCnf.StartConferenceOnEnter {
+		t.Error("Expected ConferenceDial.StartConferenceOnEnter true")
+	}
+}
+
+func TestParseConferenceDialBeep(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial><Conference beep="true">my-room</Conference></Dial>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	dial, ok := resp.Children[0].(*Dial)
+	if !ok {
+		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+	}
+
+	conf, ok := dial.Children[0].(*ConferenceDial)
+	if !ok {
+		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+	}
+
+	if !conf.Beep {
+		t.Error("Expected Beep to be true")
+	}
+}
+
+func TestParseConferenceDialWaitMethod(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial><Conference waitUrl="http://example.com/wait" waitMethod="GET">my-room</Conference></Dial>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	dial, ok := resp.Children[0].(*Dial)
+	if !ok {
+		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+	}
+
+	conf, ok := dial.Children[0].(*ConferenceDial)
+	if !ok {
+		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+	}
+
+	if conf.WaitURL != "http://example.com/wait" {
+		t.Errorf("Expected WaitURL 'http://example.com/wait', got %q", conf.WaitURL)
+	}
+
+	if conf.WaitMethod != "GET" {
+		t.Errorf("Expected WaitMethod 'GET', got %q", conf.WaitMethod)
+	}
+}
+
+func TestParseConferenceDialWaitMethodDefault(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial><Conference>my-room</Conference></Dial>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	dial, ok := resp.Children[0].(*Dial)
+	if !ok {
+		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+	}
+
+	conf, ok := dial.Children[0].(*ConferenceDial)
+	if !ok {
+		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+	}
+
+	if conf.WaitMethod != "POST" {
+		t.Errorf("Expected default WaitMethod 'POST', got %q", conf.WaitMethod)
+	}
+}
+
+func TestParseConferenceDialRecord(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial><Conference record="record-from-start" recordingStatusCallback="http://example.com/recording">my-room</Conference></Dial>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	dial, ok := resp.Children[0].(*Dial)
+	if !ok {
+		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+	}
+
+	conf, ok := dial.Children[0].(*ConferenceDial)
+	if !ok {
+		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+	}
+
+	if conf.Record != "record-from-start" {
+		t.Errorf("Expected Record 'record-from-start', got %q", conf.Record)
+	}
+
+	if conf.RecordingStatusCallback != "http://example.com/recording" {
+		t.Errorf("Expected RecordingStatusCallback URL, got %q", conf.RecordingStatusCallback)
+	}
+}
+
+func TestParseConferenceDialAllAttributes(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial><Conference
+    muted="true"
+    beep="true"
+    startConferenceOnEnter="false"
+    endConferenceOnExit="true"
+    waitUrl="http://example.com/wait"
+    waitMethod="GET"
+    statusCallback="http://example.com/status"
+    statusCallbackEvent="start end"
+    record="record-from-start"
+    recordingStatusCallback="http://example.com/recording">test-room</Conference></Dial>
+</Response>`
+
+	resp, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	dial, ok := resp.Children[0].(*Dial)
+	if !ok {
+		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
+	}
+
+	conf, ok := dial.Children[0].(*ConferenceDial)
+	if !ok {
+		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+	}
+
+	if !conf.Muted {
+		t.Error("Expected Muted to be true")
+	}
+	if !conf.Beep {
+		t.Error("Expected Beep to be true")
+	}
+	if conf.StartConferenceOnEnter {
+		t.Error("Expected StartConferenceOnEnter to be false")
+	}
+	if !conf.EndConferenceOnExit {
+		t.Error("Expected EndConferenceOnExit to be true")
+	}
+	if conf.WaitURL != "http://example.com/wait" {
+		t.Errorf("Expected WaitURL, got %q", conf.WaitURL)
+	}
+	if conf.WaitMethod != "GET" {
+		t.Errorf("Expected WaitMethod 'GET', got %q", conf.WaitMethod)
+	}
+	if conf.StatusCallback != "http://example.com/status" {
+		t.Errorf("Expected StatusCallback, got %q", conf.StatusCallback)
+	}
+	if conf.StatusCallbackEvent != "start end" {
+		t.Errorf("Expected StatusCallbackEvent, got %q", conf.StatusCallbackEvent)
+	}
+	if conf.Record != "record-from-start" {
+		t.Errorf("Expected Record, got %q", conf.Record)
+	}
+	if conf.RecordingStatusCallback != "http://example.com/recording" {
+		t.Errorf("Expected RecordingStatusCallback, got %q", conf.RecordingStatusCallback)
+	}
+	if dial.Children == nil || len(dial.Children) != 1 {
+		t.Fatal("Expected Conference to be set")
+	}
+	dialCnf, ok := dial.Children[0].(*ConferenceDial)
+	if !ok {
+		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+	}
+	// Test that full object is accessible via ConferenceDial with all attributes
+	if !dialCnf.Beep {
+		t.Error("Expected ConferenceDial.Beep to be true")
+	}
+	if dialCnf.WaitMethod != "GET" {
+		t.Errorf("Expected ConferenceDial.WaitMethod 'GET', got %q", dialCnf.WaitMethod)
+	}
+	if dialCnf.Record != "record-from-start" {
+		t.Errorf("Expected ConferenceDial.Record, got %q", dialCnf.Record)
 	}
 }
 
@@ -178,9 +399,15 @@ func TestParseDialHangupOnStar(t *testing.T) {
 	if !dial.HangupOnStar {
 		t.Error("Expected HangupOnStar to be true")
 	}
-
-	if dial.Number != "+15551234567" {
-		t.Errorf("Expected number, got %q", dial.Number)
+	if dial.Children == nil || len(dial.Children) != 1 {
+		t.Fatal("Expected Conference to be set")
+	}
+	num, ok := dial.Children[0].(*Number)
+	if !ok {
+		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+	}
+	if num.Number != "+15551234567" {
+		t.Errorf("Expected number, got %q", num.Number)
 	}
 }
 

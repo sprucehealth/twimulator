@@ -57,17 +57,13 @@ func (Gather) isNode() {}
 
 // Dial connects to another party
 type Dial struct {
-	Number                 string
-	Client                 string
-	Queue                  string
-	Conference             string
-	Action                 string
-	Method                 string
-	Timeout                time.Duration
-	HangupOnStar           bool
-	Record                 string // "do-not-record", "record-from-answer", "record-from-ringing", "record-from-answer-dual", "record-from-ringing-dual"
+	Action                  string
+	Method                  string
+	Timeout                 time.Duration
+	HangupOnStar            bool
+	Record                  string // "do-not-record", "record-from-answer", "record-from-ringing", "record-from-answer-dual", "record-from-ringing-dual"
 	RecordingStatusCallback string
-	Children               []Node // For nested <Number>, <Client>, <Queue>, <Conference>
+	Children                []Node // For nested <Number>, <Client>, <Queue>, <Conference>
 }
 
 func (Dial) isNode() {}
@@ -115,6 +111,13 @@ type Number struct {
 
 func (Number) isNode() {}
 
+// Sip is used inside <Dial> to specify a sip address
+type Sip struct {
+	SipAddress string
+}
+
+func (Sip) isNode() {}
+
 // Client is used inside <Dial> to dial a Twilio Client
 type Client struct {
 	Name string
@@ -131,13 +134,17 @@ func (QueueDial) isNode() {}
 
 // ConferenceDial is used inside <Dial> to join a conference
 type ConferenceDial struct {
-	Name                   string
-	Muted                  bool
-	StartConferenceOnEnter bool
-	EndConferenceOnExit    bool
-	WaitURL                string
-	StatusCallback         string
-	StatusCallbackEvent    string
+	Name                    string
+	Muted                   bool
+	Beep                    bool
+	StartConferenceOnEnter  bool
+	EndConferenceOnExit     bool
+	WaitURL                 string
+	WaitMethod              string
+	StatusCallback          string
+	StatusCallbackEvent     string
+	Record                  string
+	RecordingStatusCallback string
 }
 
 func (ConferenceDial) isNode() {}

@@ -95,6 +95,8 @@ func parseNode(decoder *xml.Decoder, start *xml.StartElement) (Node, error) {
 		return parseRecord(decoder, start)
 	case "Number":
 		return parseNumber(decoder, start)
+	case "Sip":
+		return parseSip(decoder, start)
 	case "Client":
 		return parseClient(decoder, start)
 	case "Queue":
@@ -273,10 +275,10 @@ func parseDial(decoder *xml.Decoder, start *xml.StartElement) (*Dial, error) {
 			} else {
 				// Validate the record value
 				validRecordValues := map[string]bool{
-					"do-not-record":           true,
-					"record-from-answer":      true,
-					"record-from-ringing":     true,
-					"record-from-answer-dual": true,
+					"do-not-record":            true,
+					"record-from-answer":       true,
+					"record-from-ringing":      true,
+					"record-from-answer-dual":  true,
 					"record-from-ringing-dual": true,
 				}
 				if !validRecordValues[attr.Value] {
@@ -314,23 +316,12 @@ func parseDial(decoder *xml.Decoder, start *xml.StartElement) (*Dial, error) {
 			}
 			if node != nil {
 				dial.Children = append(dial.Children, node)
-				// Extract specific fields from children
-				switch n := node.(type) {
-				case *Number:
-					dial.Number = n.Number
-				case *Client:
-					dial.Client = n.Name
-				case *QueueDial:
-					dial.Queue = n.Name
-				case *ConferenceDial:
-					dial.Conference = n.Name
-				}
 			}
 		case xml.EndElement:
 			if t.Name.Local == "Dial" {
 				// If no children but has text, it's a plain number
 				if len(dial.Children) == 0 && textContent != "" {
-					dial.Number = textContent
+					dial.Children = append(dial.Children, &Number{Number: textContent})
 				}
 				return dial, nil
 			}
@@ -404,6 +395,19 @@ func parseNumber(decoder *xml.Decoder, start *xml.StartElement) (*Number, error)
 	return num, nil
 }
 
+func parseSip(decoder *xml.Decoder, start *xml.StartElement) (*Sip, error) {
+	sip := &Sip{}
+	for _, attr := range start.Attr {
+		if attr.Value != "" {
+			return nil, fmt.Errorf("unknown attribute '%s' on <Sip>", attr.Name.Local)
+		}
+	}
+	if err := decoder.DecodeElement(&sip.SipAddress, start); err != nil {
+		return nil, err
+	}
+	return sip, nil
+}
+
 func parseClient(decoder *xml.Decoder, start *xml.StartElement) (*Client, error) {
 	client := &Client{}
 	for _, attr := range start.Attr {
@@ -434,22 +438,31 @@ func parseConferenceDial(decoder *xml.Decoder, start *xml.StartElement) (*Confer
 	conf := &ConferenceDial{
 		StartConferenceOnEnter: true,
 		EndConferenceOnExit:    false,
+		WaitMethod:             "POST", // default
 	}
 
 	for _, attr := range start.Attr {
 		switch attr.Name.Local {
 		case "muted":
 			conf.Muted = attr.Value == "true"
+		case "beep":
+			conf.Beep = attr.Value == "true"
 		case "startConferenceOnEnter":
 			conf.StartConferenceOnEnter = attr.Value == "true"
 		case "endConferenceOnExit":
 			conf.EndConferenceOnExit = attr.Value == "true"
 		case "waitUrl":
 			conf.WaitURL = attr.Value
+		case "waitMethod":
+			conf.WaitMethod = strings.ToUpper(attr.Value)
 		case "statusCallback":
 			conf.StatusCallback = attr.Value
 		case "statusCallbackEvent":
 			conf.StatusCallbackEvent = attr.Value
+		case "record":
+			conf.Record = attr.Value
+		case "recordingStatusCallback":
+			conf.RecordingStatusCallback = attr.Value
 		default:
 			if attr.Value != "" {
 				return nil, fmt.Errorf("unknown attribute '%s' on <Conference>", attr.Name.Local)

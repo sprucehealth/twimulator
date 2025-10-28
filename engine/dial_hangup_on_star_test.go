@@ -157,6 +157,8 @@ func TestDialHangupOnStar(t *testing.T) {
 				return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial hangupOnStar="true"><Conference>test-room</Conference></Dial>
+  <Say>Left conference</Say>
+  <Hangup/>
 </Response>`), make(http.Header), nil
 			}
 			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
@@ -183,21 +185,33 @@ func TestDialHangupOnStar(t *testing.T) {
 		e.Advance(1 * time.Second)
 		time.Sleep(10 * time.Millisecond)
 
-		// Send star digit to trigger hangup
+		// Send star digit - this should leave the conference and continue with subsequent TwiML
 		err = e.SendDigits(subAccount.SID, call.SID, "*")
 		if err != nil {
 			t.Fatal(err)
 		}
-		e.Advance(1 * time.Second)
+		e.Advance(2 * time.Second)
 		time.Sleep(100 * time.Millisecond)
 
-		// Verify call is now completed
+		// Verify call completed after executing subsequent TwiML
 		got, ok := e.GetCallState(subAccount.SID, call.SID)
 		if !ok {
 			t.Fatal("Call not found")
 		}
 		if got.Status != model.CallCompleted {
-			t.Errorf("Expected call completed after star digit, got %s", got.Status)
+			t.Errorf("Expected call completed after executing subsequent TwiML, got %s", got.Status)
+		}
+
+		// Verify hangup_on_star event exists
+		hasHangupOnStar := false
+		for _, event := range got.Timeline {
+			if event.Type == "dial.hangup_on_star" {
+				hasHangupOnStar = true
+				break
+			}
+		}
+		if !hasHangupOnStar {
+			t.Error("Expected dial.hangup_on_star event in timeline")
 		}
 	})
 
