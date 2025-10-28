@@ -572,7 +572,7 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 					r.addEvent("dial.hangup_on_star", map[string]any{
 						"digits": digits,
 					})
-					return r.executeHangup(false)
+					goto bridgeEnded
 				}
 			}
 		}
@@ -592,7 +592,7 @@ bridgeEnded:
 		targetQueueTime = int(startTime.Sub(targetQueueStart).Seconds())
 	}
 
-	r.addEvent("dial.queue.bridged", map[string]any{
+	r.addEvent("dial.queue.left", map[string]any{
 		"queue":             dial.Queue,
 		"target_call_sid":   targetCallSID,
 		"dial_duration":     dialDuration,
@@ -670,12 +670,8 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 					r.addEvent("dial.hangup_on_star", map[string]any{
 						"digits": digits,
 					})
-					// Clean up before hanging up
-					r.state.mu.Lock()
-					r.removeFromQueue(queue)
-					r.call.CurrentEndpoint = ""
-					r.state.mu.Unlock()
-					return r.executeHangup(false)
+					queueResult = "hangup-on-star"
+					goto queueLeft
 				}
 			}
 		}
@@ -748,7 +744,7 @@ queueLeft:
 						r.addEvent("dial.hangup_on_star", map[string]any{
 							"digits": digits,
 						})
-						return r.executeHangup(false)
+						goto bridgeEnded
 					}
 				}
 			}
@@ -837,11 +833,10 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 					r.addEvent("dial.hangup_on_star", map[string]any{
 						"digits": digits,
 					})
-					// Clean up before hanging up
 					r.state.mu.Lock()
 					r.removeFromConference(conf)
 					r.state.mu.Unlock()
-					return r.executeHangup(false)
+					return nil
 				}
 			}
 		}
@@ -866,9 +861,9 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial) er
 	}
 
 	r.addEvent("dial.number", map[string]any{
-		"target":        target,
-		"timeout":       dial.Timeout.Seconds(),
-		"hangupOnStar":  dial.HangupOnStar,
+		"target":       target,
+		"timeout":      dial.Timeout.Seconds(),
+		"hangupOnStar": dial.HangupOnStar,
 	})
 
 	// For MVP, just simulate the dial
@@ -963,7 +958,7 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 	endTime := r.clock.Now()
 	queueTime := int(endTime.Sub(startTime).Seconds())
 
-	r.addEvent("enqueue.bridged", map[string]any{
+	r.addEvent("enqueue.left", map[string]any{
 		"queue":          enqueue.Name,
 		"agent_call_sid": agentCallSID,
 		"queue_time":     queueTime,
@@ -1396,6 +1391,16 @@ func (r *CallRunner) executeActionCallback(ctx context.Context, actionURL string
 			"url":     resolvedURL,
 		})
 		return r.executeHangup(true)
+	}
+	// clear collected digits to avoid sending them again
+
+	r.state.mu.RLock()
+	digits := r.call.Variables["Digits"]
+	r.state.mu.RUnlock()
+	if digits != "" {
+		r.state.mu.Lock()
+		r.call.Variables["Digits"] = ""
+		r.state.mu.Unlock()
 	}
 
 	return r.executeTwiML(ctx, resp, resolvedURL)
