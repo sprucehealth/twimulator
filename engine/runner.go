@@ -815,7 +815,7 @@ queueLeft:
 }
 
 func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial, conferenceDial *twiml.ConferenceDial, currentTwimlDocumentURL string) error {
-	conf := r.engine.getOrCreateConference(r.call.AccountSID, conferenceDial.Name)
+	conf := r.engine.getOrCreateConference(r.call.AccountSID, conferenceDial)
 
 	r.state.mu.Lock()
 	// Add participant
@@ -826,14 +826,37 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 		map[string]any{"call_sid": r.call.SID},
 	))
 
-	// Update conference status
+	// Store participant attributes
+	if r.state.participantStates[conf.SID] == nil {
+		r.state.participantStates[conf.SID] = make(map[model.SID]*model.ParticipantState)
+	}
+	partState := r.state.participantStates[conf.SID][r.call.SID]
+	if partState == nil {
+		partState = &model.ParticipantState{}
+		r.state.participantStates[conf.SID][r.call.SID] = partState
+	}
+	partState.StartConferenceOnEnter = conferenceDial.StartConferenceOnEnter
+	partState.EndConferenceOnExit = conferenceDial.EndConferenceOnExit
+
+	// Check if conference should start
+	// Conference starts if it has at least 2 participants and at least one has StartConferenceOnEnter=true
+	shouldStart := false
 	if len(conf.Participants) >= 2 && conf.Status == model.ConferenceCreated {
-		conf.Status = model.ConferenceInProgress
-		conf.Timeline = append(conf.Timeline, model.NewEvent(
-			r.clock.Now(),
-			"conference.started",
-			map[string]any{},
-		))
+		// Check if at least one participant has StartConferenceOnEnter=true
+		for _, participantSID := range conf.Participants {
+			if ps := r.state.participantStates[conf.SID][participantSID]; ps != nil && ps.StartConferenceOnEnter {
+				shouldStart = true
+				break
+			}
+		}
+		if shouldStart {
+			conf.Status = model.ConferenceInProgress
+			conf.Timeline = append(conf.Timeline, model.NewEvent(
+				r.clock.Now(),
+				"conference.started",
+				map[string]any{},
+			))
+		}
 	}
 
 	r.call.CurrentEndpoint = "conference:" + conferenceDial.Name
@@ -1477,24 +1500,40 @@ func (r *CallRunner) removeFromQueue(queue *model.Queue) {
 }
 
 func (r *CallRunner) removeFromConference(conf *model.Conference) {
+	// Check if this participant has EndConferenceOnExit=true
+	endConferenceOnExit := false
+	if r.state.participantStates[conf.SID] != nil {
+		if ps := r.state.participantStates[conf.SID][r.call.SID]; ps != nil && ps.EndConferenceOnExit {
+			endConferenceOnExit = true
+		}
+	}
+
 	for i, sid := range conf.Participants {
 		if sid == r.call.SID {
 			conf.Participants = append(conf.Participants[:i], conf.Participants[i+1:]...)
 			conf.Timeline = append(conf.Timeline, model.NewEvent(
 				r.clock.Now(),
 				"participant.left",
-				map[string]any{"call_sid": r.call.SID},
+				map[string]any{
+					"call_sid":              r.call.SID,
+					"end_conference_on_exit": endConferenceOnExit,
+				},
 			))
 
-			// If last participant, mark conference completed
-			if len(conf.Participants) == 0 {
+			// If this participant has EndConferenceOnExit=true, end the conference
+			// Or if last participant, mark conference completed
+			if endConferenceOnExit || len(conf.Participants) == 0 {
 				conf.Status = model.ConferenceCompleted
 				now := r.clock.Now()
 				conf.EndedAt = &now
+				reason := "last_participant_left"
+				if endConferenceOnExit && len(conf.Participants) > 0 {
+					reason = "end_conference_on_exit"
+				}
 				conf.Timeline = append(conf.Timeline, model.NewEvent(
 					now,
 					"conference.ended",
-					map[string]any{},
+					map[string]any{"reason": reason},
 				))
 			}
 			break

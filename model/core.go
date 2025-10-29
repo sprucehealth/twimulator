@@ -103,12 +103,14 @@ type Conference struct {
 
 // ParticipantState represents the state of a call within a specific conference
 type ParticipantState struct {
-	Muted          bool   `json:"muted"`
-	Hold           bool   `json:"hold"`
-	HoldUrl        string `json:"hold_url,omitempty"`
-	HoldMethod     string `json:"hold_method,omitempty"`
-	AnnounceUrl    string `json:"announce_url,omitempty"`
-	AnnounceMethod string `json:"announce_method,omitempty"`
+	Muted                  bool   `json:"muted"`
+	Hold                   bool   `json:"hold"`
+	HoldUrl                string `json:"hold_url,omitempty"`
+	HoldMethod             string `json:"hold_method,omitempty"`
+	AnnounceUrl            string `json:"announce_url,omitempty"`
+	AnnounceMethod         string `json:"announce_method,omitempty"`
+	StartConferenceOnEnter bool   `json:"start_conference_on_enter"`
+	EndConferenceOnExit    bool   `json:"end_conference_on_exit"`
 }
 
 // Event represents a timeline event for a call, queue, or conference

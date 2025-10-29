@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sprucehealth/twimulator/twiml"
 	twilioopenapi "github.com/twilio/twilio-go/rest/api/v2010"
 
 	"github.com/sprucehealth/twimulator/httpstub"
@@ -2106,7 +2107,7 @@ func (e *EngineImpl) getOrCreateQueue(accountSID model.SID, name string) *model.
 }
 
 // getOrCreateConference is a public wrapper that handles locking
-func (e *EngineImpl) getOrCreateConference(accountSID model.SID, name string) *model.Conference {
+func (e *EngineImpl) getOrCreateConference(accountSID model.SID, cnf *twiml.ConferenceDial) *model.Conference {
 	e.subAccountsMu.RLock()
 	state, exists := e.subAccounts[accountSID]
 	e.subAccountsMu.RUnlock()
@@ -2117,7 +2118,7 @@ func (e *EngineImpl) getOrCreateConference(accountSID model.SID, name string) *m
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	return e.getOrCreateConferenceLocked(state, accountSID, name)
+	return e.getOrCreateConferenceLocked(state, accountSID, cnf.Name)
 }
 
 //
