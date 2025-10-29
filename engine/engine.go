@@ -419,6 +419,7 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 			"from":   call.From,
 			"to":     call.To,
 			"status": call.Status,
+			"params": params,
 		},
 	))
 
@@ -1977,11 +1978,15 @@ func (e *EngineImpl) shouldSendStatusCallback(call *model.Call, status model.Cal
 	}
 
 	// Check if this status is in the requested events list
-	for _, event := range call.StatusCallbackEvents {
-		if event == status {
+	for _, interestedInEvent := range call.StatusCallbackEvents {
+		if interestedInEvent == status {
 			return true
 		}
-		if status.IsTerminal() && event.IsTerminal() {
+		if interestedInEvent == model.CallAnswered &&
+			status == model.CallInProgress {
+			return true
+		}
+		if status.IsTerminal() && interestedInEvent.IsTerminal() {
 			return true
 		}
 	}
