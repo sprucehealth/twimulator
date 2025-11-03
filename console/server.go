@@ -105,6 +105,7 @@ func NewConsoleServer(e engine.Engine, addr string) (*ConsoleServer, error) {
 	mux.HandleFunc("/subaccounts/", cs.handleSubAccountDetail)
 	mux.HandleFunc("/calls/", cs.handleCallDetail)
 	mux.HandleFunc("/conferences/", cs.handleConferenceDetail)
+	mux.HandleFunc("/queues/", cs.handleQueueDetail)
 	mux.HandleFunc("/numbers/", cs.handleNumberDetail)
 	mux.HandleFunc("/addresses/", cs.handleAddressDetail)
 	mux.HandleFunc("/api/snapshot", cs.handleSnapshot)
@@ -449,6 +450,40 @@ func (cs *ConsoleServer) handleConferenceDetail(w http.ResponseWriter, r *http.R
 	}
 
 	if err := cs.tmpl.ExecuteTemplate(w, "conference.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (cs *ConsoleServer) handleQueueDetail(w http.ResponseWriter, r *http.Request) {
+	sid := strings.TrimPrefix(r.URL.Path, "/queues/")
+	if sid == "" {
+		http.Error(w, "Queue SID required", http.StatusBadRequest)
+		return
+	}
+
+	snaps := cs.engine.SnapshotAll()
+	var queue *model.Queue
+	for _, snap := range snaps {
+		for _, q := range snap.Queues {
+			if string(q.SID) == sid {
+				queue = q
+				break
+			}
+		}
+		if queue != nil {
+			break
+		}
+	}
+	if queue == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	data := map[string]any{
+		"Queue": queue,
+	}
+
+	if err := cs.tmpl.ExecuteTemplate(w, "queue.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

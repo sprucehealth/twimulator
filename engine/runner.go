@@ -555,13 +555,14 @@ func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial, que
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, queueDial.Name)
 	queueSID := queue.SID
 
+	r.state.mu.RLock()
 	// Check if there are waiting members to connect to
 	var targetCallSID model.SID
 	if len(queue.Members) > 0 {
 		// Get the first waiting caller (FIFO)
 		targetCallSID = queue.Members[0]
 	}
-
+	r.state.mu.RUnlock()
 	// Two scenarios:
 	// 1. If there's a waiting caller, bridge with them
 	// 2. If no waiting caller, join queue and wait for one
@@ -1135,12 +1136,6 @@ func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue,
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, enqueue.Name)
 	queueSID := queue.SID
 
-	// Check if there are waiting agents (from Dial Queue) to connect to
-	var targetCallSID model.SID
-	if len(queue.Members) > 0 {
-		// Get the first waiting agent (FIFO)
-		targetCallSID = queue.Members[0]
-	}
 	if err := r.executeWait(ctx, "enqueue", enqueue.WaitURL, enqueue.WaitURLMethod, currentTwimlDocumentURL); err != nil {
 		return err
 	}
@@ -1148,6 +1143,14 @@ func (r *CallRunner) executeEnqueue(ctx context.Context, enqueue *twiml.Enqueue,
 	// 1. If there's a waiting agent, bridge with them immediately
 	// 2. If no waiting agent, enqueue and wait indefinitely
 
+	r.state.mu.RLock()
+	// Check if there are waiting agents (from Dial Queue) to connect to
+	var targetCallSID model.SID
+	if len(queue.Members) > 0 {
+		// Get the first waiting agent (FIFO)
+		targetCallSID = queue.Members[0]
+	}
+	r.state.mu.RUnlock()
 	if targetCallSID != "" {
 		// Scenario 1: Bridge with waiting agent immediately
 		return r.bridgeEnqueueWithAgent(ctx, enqueue, queueSID, targetCallSID, currentTwimlDocumentURL)

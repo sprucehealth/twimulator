@@ -34,8 +34,8 @@
                 <tbody>
                     {{range .Queues}}
                     <tr>
-                        <td>{{.SID}}</td>
-                        <td><strong>{{.Name}}</strong></td>
+                        <td><a href="/queues/{{.SID}}">{{.SID}}</a></td>
+                        <td><strong><a href="/queues/{{.SID}}">{{.Name}}</a></strong></td>
                         <td>{{len .Members}}</td>
                         <td>{{len .Timeline}}</td>
                     </tr>

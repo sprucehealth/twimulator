@@ -1,5 +1,4 @@
 {
-  "spinnerTipsEnabled": false,
   "permissions": {
     "allow": [
       "Bash(mkdir:*)",
@@ -12,9 +11,11 @@
       "Bash(find:*)",
       "Bash(engine/runner.go)",
       "WebSearch",
-      "WebFetch(domain:pkg.go.dev)"
+      "WebFetch(domain:pkg.go.dev)",
+      "WebFetch(domain:localhost)"
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "spinnerTipsEnabled": false
 }

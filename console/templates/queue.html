@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Queue {{.Queue.SID}} - Twimulator Console</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Twimulator Console</h1>
+            <nav>
+                <a href="/">SubAccounts</a>
+                <a href="/api/snapshot" target="_blank">API Snapshot</a>
+            </nav>
+        </header>
+
+        <main>
+            <div class="breadcrumb">
+                <a href="/">SubAccounts</a> &raquo;
+                <a href="/subaccounts/{{.Queue.AccountSID}}">{{.Queue.AccountSID}}</a> &raquo;
+                {{.Queue.SID}}
+            </div>
+
+            <h2>Queue Details</h2>
+
+            <div class="detail-grid">
+                <div class="detail-item">
+                    <label>SID</label>
+                    <div>{{.Queue.SID}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Name</label>
+                    <div><strong>{{.Queue.Name}}</strong></div>
+                </div>
+                <div class="detail-item">
+                    <label>Current Size</label>
+                    <div>{{len .Queue.Members}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Account SID</label>
+                    <div><a href="/subaccounts/{{.Queue.AccountSID}}">{{.Queue.AccountSID}}</a></div>
+                </div>
+            </div>
+
+            {{if .Queue.Members}}
+            <h3>Members ({{len .Queue.Members}})</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Call SID</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Queue.Members}}
+                    <tr>
+                        <td><a href="/calls/{{.}}">{{.}}</a></td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{end}}
+
+            <h3>Timeline</h3>
+            <div class="timeline">
+                {{range .Queue.Timeline}}
+                <div class="timeline-event">
+                    <div class="timeline-time">{{.Time.Format "15:04:05.000"}}</div>
+                    <div class="timeline-content">
+                        <div class="timeline-type">{{.Type}}</div>
+                        {{if .Detail}}
+                        <div class="timeline-detail">
+                            <pre>{{json .Detail}}</pre>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+                {{end}}
+            </div>
+        </main>
+    </div>
+</body>
+</html>
