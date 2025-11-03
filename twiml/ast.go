@@ -125,15 +125,15 @@ type Client struct {
 
 func (Client) isNode() {}
 
-// QueueDial is used inside <Dial> to dial a queue member
-type QueueDial struct {
+// Queue is used inside <Dial> to dial a queue member
+type Queue struct {
 	Name string
 }
 
-func (QueueDial) isNode() {}
+func (Queue) isNode() {}
 
-// ConferenceDial is used inside <Dial> to join a conference
-type ConferenceDial struct {
+// Conference is used inside <Dial> to join a conference
+type Conference struct {
 	Name                    string
 	Muted                   bool
 	Beep                    bool
@@ -147,4 +147,4 @@ type ConferenceDial struct {
 	RecordingStatusCallback string
 }
 
-func (ConferenceDial) isNode() {}
+func (Conference) isNode() {}

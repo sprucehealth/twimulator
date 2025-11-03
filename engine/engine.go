@@ -2205,7 +2205,7 @@ func (e *EngineImpl) getOrCreateQueueLocked(state *subAccountState, accountSID m
 }
 
 // getOrCreateConferenceLocked gets or creates a conference for a subaccount. Caller must hold state.mu.
-func (e *EngineImpl) getOrCreateConferenceLocked(state *subAccountState, accountSID model.SID, cnf *twiml.ConferenceDial) *model.Conference {
+func (e *EngineImpl) getOrCreateConferenceLocked(state *subAccountState, accountSID model.SID, cnf *twiml.Conference) *model.Conference {
 	if conf, exists := state.conferences[cnf.Name]; exists {
 		// If conference exists and StatusCallback is provided, update it
 		if cnf.StatusCallback != "" && conf.StatusCallback == "" {
@@ -2263,7 +2263,7 @@ func (e *EngineImpl) getOrCreateQueue(accountSID model.SID, name string) *model.
 }
 
 // getOrCreateConference is a public wrapper that handles locking
-func (e *EngineImpl) getOrCreateConference(accountSID model.SID, cnf *twiml.ConferenceDial) *model.Conference {
+func (e *EngineImpl) getOrCreateConference(accountSID model.SID, cnf *twiml.Conference) *model.Conference {
 	e.subAccountsMu.RLock()
 	state, exists := e.subAccounts[accountSID]
 	e.subAccountsMu.RUnlock()

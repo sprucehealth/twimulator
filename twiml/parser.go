@@ -421,8 +421,8 @@ func parseClient(decoder *xml.Decoder, start *xml.StartElement) (*Client, error)
 	return client, nil
 }
 
-func parseQueueDial(decoder *xml.Decoder, start *xml.StartElement) (*QueueDial, error) {
-	queue := &QueueDial{}
+func parseQueueDial(decoder *xml.Decoder, start *xml.StartElement) (*Queue, error) {
+	queue := &Queue{}
 	for _, attr := range start.Attr {
 		if attr.Value != "" {
 			return nil, fmt.Errorf("unknown attribute '%s' on <Queue>", attr.Name.Local)
@@ -434,8 +434,8 @@ func parseQueueDial(decoder *xml.Decoder, start *xml.StartElement) (*QueueDial, 
 	return queue, nil
 }
 
-func parseConferenceDial(decoder *xml.Decoder, start *xml.StartElement) (*ConferenceDial, error) {
-	conf := &ConferenceDial{
+func parseConferenceDial(decoder *xml.Decoder, start *xml.StartElement) (*Conference, error) {
+	conf := &Conference{
 		StartConferenceOnEnter: true,
 		EndConferenceOnExit:    false,
 		WaitMethod:             "POST", // default

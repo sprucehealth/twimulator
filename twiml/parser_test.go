@@ -124,11 +124,11 @@ func TestParseDialQueue(t *testing.T) {
 		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
 	}
 	if dial.Children == nil || len(dial.Children) != 1 {
-		t.Fatal("Expected QueueDial to be set")
+		t.Fatal("Expected Queue to be set")
 	}
-	queue, ok := dial.Children[0].(*QueueDial)
+	queue, ok := dial.Children[0].(*Queue)
 	if !ok {
-		t.Fatalf("Expected *QueueDial, got %T", dial.Children[0])
+		t.Fatalf("Expected *Queue, got %T", dial.Children[0])
 	}
 	if queue.Name != "support" {
 		t.Errorf("Expected queue 'support', got %q", queue.Name)
@@ -153,9 +153,9 @@ func TestParseDialConference(t *testing.T) {
 	if dial.Children == nil || len(dial.Children) != 1 {
 		t.Fatal("Expected Conference to be set")
 	}
-	dialCnf, ok := dial.Children[0].(*ConferenceDial)
+	dialCnf, ok := dial.Children[0].(*Conference)
 	if !ok {
-		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+		t.Fatalf("Expected *Conference, got %T", dial.Children[0])
 	}
 
 	if dialCnf.Name != "my-room" {
@@ -166,9 +166,9 @@ func TestParseDialConference(t *testing.T) {
 		t.Fatalf("Expected 1 child, got %d", len(dial.Children))
 	}
 
-	conf, ok := dial.Children[0].(*ConferenceDial)
+	conf, ok := dial.Children[0].(*Conference)
 	if !ok {
-		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+		t.Fatalf("Expected *Conference, got %T", dial.Children[0])
 	}
 
 	if !conf.StartConferenceOnEnter {
@@ -178,13 +178,13 @@ func TestParseDialConference(t *testing.T) {
 		t.Error("Expected EndConferenceOnExit false")
 	}
 
-	// Verify dial.ConferenceDial points to the same object
+	// Verify dial.Conference points to the same object
 	if dialCnf != conf {
-		t.Error("Expected dial.ConferenceDial to point to same object as in Children")
+		t.Error("Expected dial.Conference to point to same object as in Children")
 	}
 
 	if !dialCnf.StartConferenceOnEnter {
-		t.Error("Expected ConferenceDial.StartConferenceOnEnter true")
+		t.Error("Expected Conference.StartConferenceOnEnter true")
 	}
 }
 
@@ -204,9 +204,9 @@ func TestParseConferenceDialBeep(t *testing.T) {
 		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
 	}
 
-	conf, ok := dial.Children[0].(*ConferenceDial)
+	conf, ok := dial.Children[0].(*Conference)
 	if !ok {
-		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+		t.Fatalf("Expected *Conference, got %T", dial.Children[0])
 	}
 
 	if !conf.Beep {
@@ -230,9 +230,9 @@ func TestParseConferenceDialWaitMethod(t *testing.T) {
 		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
 	}
 
-	conf, ok := dial.Children[0].(*ConferenceDial)
+	conf, ok := dial.Children[0].(*Conference)
 	if !ok {
-		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+		t.Fatalf("Expected *Conference, got %T", dial.Children[0])
 	}
 
 	if conf.WaitURL != "http://example.com/wait" {
@@ -260,9 +260,9 @@ func TestParseConferenceDialWaitMethodDefault(t *testing.T) {
 		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
 	}
 
-	conf, ok := dial.Children[0].(*ConferenceDial)
+	conf, ok := dial.Children[0].(*Conference)
 	if !ok {
-		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+		t.Fatalf("Expected *Conference, got %T", dial.Children[0])
 	}
 
 	if conf.WaitMethod != "POST" {
@@ -286,9 +286,9 @@ func TestParseConferenceDialRecord(t *testing.T) {
 		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
 	}
 
-	conf, ok := dial.Children[0].(*ConferenceDial)
+	conf, ok := dial.Children[0].(*Conference)
 	if !ok {
-		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+		t.Fatalf("Expected *Conference, got %T", dial.Children[0])
 	}
 
 	if conf.Record != "record-from-start" {
@@ -326,9 +326,9 @@ func TestParseConferenceDialAllAttributes(t *testing.T) {
 		t.Fatalf("Expected *Dial, got %T", resp.Children[0])
 	}
 
-	conf, ok := dial.Children[0].(*ConferenceDial)
+	conf, ok := dial.Children[0].(*Conference)
 	if !ok {
-		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+		t.Fatalf("Expected *Conference, got %T", dial.Children[0])
 	}
 
 	if !conf.Muted {
@@ -364,19 +364,19 @@ func TestParseConferenceDialAllAttributes(t *testing.T) {
 	if dial.Children == nil || len(dial.Children) != 1 {
 		t.Fatal("Expected Conference to be set")
 	}
-	dialCnf, ok := dial.Children[0].(*ConferenceDial)
+	dialCnf, ok := dial.Children[0].(*Conference)
 	if !ok {
-		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+		t.Fatalf("Expected *Conference, got %T", dial.Children[0])
 	}
-	// Test that full object is accessible via ConferenceDial with all attributes
+	// Test that full object is accessible via Conference with all attributes
 	if !dialCnf.Beep {
-		t.Error("Expected ConferenceDial.Beep to be true")
+		t.Error("Expected Conference.Beep to be true")
 	}
 	if dialCnf.WaitMethod != "GET" {
-		t.Errorf("Expected ConferenceDial.WaitMethod 'GET', got %q", dialCnf.WaitMethod)
+		t.Errorf("Expected Conference.WaitMethod 'GET', got %q", dialCnf.WaitMethod)
 	}
 	if dialCnf.Record != "record-from-start" {
-		t.Errorf("Expected ConferenceDial.Record, got %q", dialCnf.Record)
+		t.Errorf("Expected Conference.Record, got %q", dialCnf.Record)
 	}
 }
 
@@ -404,7 +404,7 @@ func TestParseDialHangupOnStar(t *testing.T) {
 	}
 	num, ok := dial.Children[0].(*Number)
 	if !ok {
-		t.Fatalf("Expected *ConferenceDial, got %T", dial.Children[0])
+		t.Fatalf("Expected *Conference, got %T", dial.Children[0])
 	}
 	if num.Number != "+15551234567" {
 		t.Errorf("Expected number, got %q", num.Number)

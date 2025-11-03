@@ -23,7 +23,7 @@ var ErrURLUpdated = errors.New("call URL updated")
 
 // dequeueResult contains information about a dequeue event
 type dequeueResult struct {
-	result    string    // "bridged", "hangup", etc.
+	result     string    // "bridged", "hangup", etc.
 	partnerSID model.SID // SID of the bridged partner (if bridged)
 }
 
@@ -492,8 +492,8 @@ gatherComplete:
 func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentTwimlDocumentURL string) error {
 	r.trackTwiML(dial)
 
-	var queueDial *twiml.QueueDial
-	var conferenceDial *twiml.ConferenceDial
+	var queueDial *twiml.Queue
+	var conferenceDial *twiml.Conference
 	var numbers []*twiml.Number
 	var clients []*twiml.Client
 	var sips []*twiml.Sip
@@ -505,12 +505,12 @@ func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentT
 			clients = append(clients, n)
 		case *twiml.Sip:
 			sips = append(sips, n)
-		case *twiml.QueueDial:
+		case *twiml.Queue:
 			if queueDial != nil {
 				return fmt.Errorf("dial cannot contain more than one queue")
 			}
 			queueDial = n
-		case *twiml.ConferenceDial:
+		case *twiml.Conference:
 			if conferenceDial != nil {
 				return fmt.Errorf("dial cannot contain more than one conference")
 			}
@@ -543,7 +543,7 @@ func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentT
 	return nil
 }
 
-func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial, queueDial *twiml.QueueDial, currentTwimlDocumentURL string) error {
+func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial, queueDial *twiml.Queue, currentTwimlDocumentURL string) error {
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, queueDial.Name)
 	queueSID := queue.SID
 
@@ -797,7 +797,7 @@ queueLeft:
 	if queueResult == "bridged" {
 		bridgeStartTime := r.clock.Now()
 		r.addEvent("dial.queue.bridge_started", map[string]any{
-			"queue":      queue.Name,
+			"queue":       queue.Name,
 			"partner_sid": bridgePartnerSID,
 		})
 
@@ -907,7 +907,7 @@ queueLeft:
 	return r.executeActionCallback(ctx, dial.Action, form, currentTwimlDocumentURL, false)
 }
 
-func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial, conferenceDial *twiml.ConferenceDial, currentTwimlDocumentURL string) error {
+func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial, conferenceDial *twiml.Conference, currentTwimlDocumentURL string) error {
 	conf := r.engine.getOrCreateConference(r.call.AccountSID, conferenceDial)
 
 	r.state.mu.Lock()
@@ -1229,6 +1229,7 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 	// Fetch and parse WaitURL if provided
 	// WaitURL can return either TwiML or an audio file
 	var waitTwiML *twiml.Response
+	var waitTwiMLDocumentURL string
 	var waitAudioURL string
 	if enqueue.WaitURL != "" {
 		resolvedWaitURL, urlErr := resolveURL(currentTwimlDocumentURL, enqueue.WaitURL)
@@ -1283,6 +1284,7 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 			parsed, parseErr := twiml.Parse(body)
 			if parseErr == nil {
 				waitTwiML = parsed
+				waitTwiMLDocumentURL = resolvedWaitURL
 				r.addEvent("enqueue.wait_url_fetched", map[string]any{
 					"wait_url": resolvedWaitURL,
 					"type":     "twiml",
@@ -1318,7 +1320,7 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 
 	// Execute wait TwiML once to validate it (e.g., check Play URLs are reachable)
 	if waitTwiML != nil {
-		if err := r.executeTwiML(ctx, waitTwiML, currentTwimlDocumentURL); err != nil {
+		if err := r.executeTwiML(ctx, waitTwiML, waitTwiMLDocumentURL); err != nil {
 			r.addEvent("enqueue.wait_twiml_error", map[string]any{
 				"error": err.Error(),
 			})
