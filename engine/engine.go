@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -328,6 +329,11 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		return nil, fmt.Errorf("Url is required")
 	}
 
+	method := http.MethodPost
+	if params.Method != nil {
+		method = *params.Method
+	}
+
 	from := ""
 	if params.From != nil {
 		from = *params.From
@@ -399,6 +405,7 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		Timeline:             []model.Event{},
 		Variables:            make(map[string]string),
 		Url:                  url,
+		Method:               method,
 		StatusCallback:       statusCallback,
 		StatusCallbackEvents: statusEvents,
 	}
@@ -488,6 +495,7 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 		Timeline:             []model.Event{},
 		Variables:            make(map[string]string),
 		Url:                  app.VoiceURL,
+		Method:               app.VoiceMethod,
 		StatusCallback:       app.StatusCallback,
 		StatusCallbackEvents: []model.CallStatus{model.CallCompleted}, // Twiml application only sends the completed event
 	}

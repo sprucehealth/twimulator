@@ -76,6 +76,7 @@ type Call struct {
 	ExecutedTwiML        []any             `json:"executed_twiml,omitempty"` // Track executed TwiML verbs for testing
 	Variables            map[string]string `json:"variables"`
 	Url                  string            `json:"url"`
+	Method               string            `json:"method"`
 	StatusCallback       string            `json:"status_callback,omitempty"`
 	StatusCallbackEvents []CallStatus      `json:"status_callback_events,omitempty"` // Events to trigger callbacks for
 }
