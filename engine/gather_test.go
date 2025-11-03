@@ -167,9 +167,6 @@ func TestTwiMLWithGatherSimpleComparison(t *testing.T) {
 				&twiml.Say{Text: "Press 2 for support", Voice: "", Language: ""},
 			},
 		},
-		// The nested Say verbs are also tracked individually:
-		&twiml.Say{Text: "Press 1 for sales", Voice: "", Language: ""},
-		&twiml.Say{Text: "Press 2 for support", Voice: "", Language: ""},
 		// Note: "Goodbye" is skipped because digits were entered
 		&twiml.Hangup{}, // From the gather action callback
 	}

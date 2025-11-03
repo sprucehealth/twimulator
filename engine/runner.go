@@ -254,11 +254,11 @@ func (r *CallRunner) executeTwiML(ctx context.Context, resp *twiml.Response, cur
 func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTwimlDocumentURL string, terminated *bool, skipRedirect bool) error {
 	switch n := node.(type) {
 	case *twiml.Say:
-		return r.executeSay(n)
+		return r.executeSay(n, false)
 	case *twiml.Play:
-		return r.executePlay(ctx, n)
+		return r.executePlay(ctx, n, false)
 	case *twiml.Pause:
-		return r.executePause(ctx, n)
+		return r.executePause(ctx, n, false)
 	case *twiml.Gather:
 		return r.executeGather(ctx, n, currentTwimlDocumentURL, terminated)
 	case *twiml.Dial:
@@ -281,8 +281,10 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTw
 	return nil
 }
 
-func (r *CallRunner) executeSay(say *twiml.Say) error {
-	r.trackCallTwiML(say)
+func (r *CallRunner) executeSay(say *twiml.Say, skipTracking bool) error {
+	if !skipTracking {
+		r.trackCallTwiML(say)
+	}
 	r.addCallEvent("twiml.say", map[string]any{
 		"text":     say.Text,
 		"voice":    say.Voice,
@@ -291,11 +293,13 @@ func (r *CallRunner) executeSay(say *twiml.Say) error {
 	return nil
 }
 
-func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
+func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play, skipTracking bool) error {
 	// Trim whitespace and newlines from URL
 	playURL := strings.TrimSpace(play.URL)
 	play.URL = playURL
-	r.trackCallTwiML(play)
+	if !skipTracking {
+		r.trackCallTwiML(play)
+	}
 
 	// Log the play attempt
 	r.addCallEvent("twiml.play", map[string]any{
@@ -336,8 +340,10 @@ func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
 	return nil
 }
 
-func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause) error {
-	r.trackCallTwiML(pause)
+func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause, skipTracking bool) error {
+	if !skipTracking {
+		r.trackCallTwiML(pause)
+	}
 	r.addCallEvent("twiml.pause", map[string]any{
 		"length": pause.Length.Seconds(),
 	})
@@ -389,15 +395,15 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 		}
 		switch n := child.(type) {
 		case *twiml.Say:
-			if err := r.executeSay(n); err != nil {
+			if err := r.executeSay(n, true); err != nil {
 				return err
 			}
 		case *twiml.Play:
-			if err := r.executePlay(ctx, n); err != nil {
+			if err := r.executePlay(ctx, n, true); err != nil {
 				return err
 			}
 		case *twiml.Pause:
-			if err := r.executePause(ctx, n); err != nil {
+			if err := r.executePause(ctx, n, true); err != nil {
 				return err
 			}
 		default:
@@ -552,7 +558,6 @@ func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentT
 }
 
 func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial, queueDial *twiml.Queue, currentTwimlDocumentURL string) error {
-	r.trackCallTwiML(queueDial)
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, queueDial.Name)
 	queueSID := queue.SID
 
@@ -918,7 +923,6 @@ queueLeft:
 }
 
 func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial, conference *twiml.Conference, currentTwimlDocumentURL string) error {
-	r.trackCallTwiML(conference)
 	conf := r.engine.getOrCreateConference(r.call.AccountSID, conference)
 	if err := r.executeWait(ctx, "conference", conference.WaitURL, conference.WaitMethod, currentTwimlDocumentURL); err != nil {
 		return err
