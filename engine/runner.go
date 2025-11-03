@@ -292,10 +292,10 @@ func (r *CallRunner) executeSay(say *twiml.Say) error {
 }
 
 func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
-	r.trackCallTwiML(play)
-
 	// Trim whitespace and newlines from URL
 	playURL := strings.TrimSpace(play.URL)
+	play.URL = playURL
+	r.trackCallTwiML(play)
 
 	// Log the play attempt
 	r.addCallEvent("twiml.play", map[string]any{
@@ -552,6 +552,7 @@ func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentT
 }
 
 func (r *CallRunner) executeDialQueue(ctx context.Context, dial *twiml.Dial, queueDial *twiml.Queue, currentTwimlDocumentURL string) error {
+	r.trackCallTwiML(queueDial)
 	queue := r.engine.getOrCreateQueue(r.call.AccountSID, queueDial.Name)
 	queueSID := queue.SID
 
@@ -917,6 +918,7 @@ queueLeft:
 }
 
 func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial, conference *twiml.Conference, currentTwimlDocumentURL string) error {
+	r.trackCallTwiML(conference)
 	conf := r.engine.getOrCreateConference(r.call.AccountSID, conference)
 	if err := r.executeWait(ctx, "conference", conference.WaitURL, conference.WaitMethod, currentTwimlDocumentURL); err != nil {
 		return err
@@ -1086,6 +1088,7 @@ conferenceEnded:
 }
 
 func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, numbers []*twiml.Number, clients []*twiml.Client, sips []*twiml.Sip) error {
+	// TODO finish this implementation
 	// Create child call leg
 	r.addCallEvent("dial.number", map[string]any{
 		"numbers":      numbers,
