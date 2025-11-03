@@ -21,6 +21,12 @@ var ErrCallHungup = errors.New("call hungup via Hangup verb")
 // ErrURLUpdated is returned when the call URL is updated during execution
 var ErrURLUpdated = errors.New("call URL updated")
 
+// dequeueResult contains information about a dequeue event
+type dequeueResult struct {
+	result    string    // "bridged", "hangup", etc.
+	partnerSID model.SID // SID of the bridged partner (if bridged)
+}
+
 // CallRunner executes TwiML for a call
 type CallRunner struct {
 	call    *model.Call
@@ -30,32 +36,36 @@ type CallRunner struct {
 	timeout time.Duration
 
 	// State for gather
-	gatherCh    chan string
-	hangupCh    chan struct{}
-	answerCh    chan struct{}
-	busyCh      chan struct{}
-	failedCh    chan struct{}
-	dequeueCh   chan string // for explicit dequeue with result
-	urlUpdateCh chan string // signals URL update with new URL
-	done        chan struct{}
+	gatherCh             chan string
+	hangupCh             chan struct{}
+	answerCh             chan struct{}
+	busyCh               chan struct{}
+	failedCh             chan struct{}
+	dequeueCh            chan dequeueResult // for explicit dequeue with result and partner info
+	urlUpdateCh          chan string        // signals URL update with new URL
+	conferenceCompleteCh chan struct{}      // signals conference completion via API
+	bridgeEndCh          chan struct{}      // signals bridge partner has hung up
+	done                 chan struct{}
 }
 
 // NewCallRunner creates a new call runner
 func NewCallRunner(call *model.Call, state *subAccountState, engine *EngineImpl, timeout time.Duration) *CallRunner {
 	return &CallRunner{
-		call:        call,
-		clock:       state.clock,
-		state:       state,
-		engine:      engine,
-		timeout:     timeout,
-		gatherCh:    make(chan string, 1),
-		hangupCh:    make(chan struct{}, 1),
-		answerCh:    make(chan struct{}, 1),
-		busyCh:      make(chan struct{}, 1),
-		failedCh:    make(chan struct{}, 1),
-		dequeueCh:   make(chan string, 1),
-		urlUpdateCh: make(chan string, 1),
-		done:        make(chan struct{}),
+		call:                 call,
+		clock:                state.clock,
+		state:                state,
+		engine:               engine,
+		timeout:              timeout,
+		gatherCh:             make(chan string, 1),
+		hangupCh:             make(chan struct{}, 1),
+		answerCh:             make(chan struct{}, 1),
+		busyCh:               make(chan struct{}, 1),
+		failedCh:             make(chan struct{}, 1),
+		dequeueCh:            make(chan dequeueResult, 1),
+		urlUpdateCh:          make(chan string, 1),
+		conferenceCompleteCh: make(chan struct{}, 1),
+		bridgeEndCh:          make(chan struct{}, 1),
+		done:                 make(chan struct{}),
 	}
 }
 
@@ -275,22 +285,26 @@ func (r *CallRunner) executeSay(say *twiml.Say) error {
 
 func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
 	r.trackTwiML(play)
+
+	// Trim whitespace and newlines from URL
+	playURL := strings.TrimSpace(play.URL)
+
 	// Log the play attempt
 	r.addEvent("twiml.play", map[string]any{
-		"url": play.URL,
+		"url": playURL,
 	})
 
 	// Fetch the media URL to ensure it's accessible
 	reqCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
-	status, _, _, err := r.engine.webhook.GET(reqCtx, play.URL)
+	status, _, _, err := r.engine.webhook.GET(reqCtx, playURL)
 	if err != nil {
 		r.addEvent("play.error", map[string]any{
-			"url":   play.URL,
+			"url":   playURL,
 			"error": err.Error(),
 		})
-		err := fmt.Errorf("failed to fetch play URL %s: %w", play.URL, err)
+		err := fmt.Errorf("failed to fetch play URL %s: %w", playURL, err)
 		r.recordError(err)
 		return err
 	}
@@ -298,16 +312,16 @@ func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play) error {
 	// Check for non-2xx status codes
 	if status < 200 || status >= 300 {
 		r.addEvent("play.error", map[string]any{
-			"url":    play.URL,
+			"url":    playURL,
 			"status": status,
 		})
-		err := fmt.Errorf("play URL %s returned status %d", play.URL, status)
+		err := fmt.Errorf("play URL %s returned status %d", playURL, status)
 		r.recordError(err)
 		return err
 	}
 
 	r.addEvent("play.success", map[string]any{
-		"url":    play.URL,
+		"url":    playURL,
 		"status": status,
 	})
 
@@ -578,10 +592,10 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 	}
 	r.state.mu.Unlock()
 
-	// Signal the target call to dequeue with "bridged" result
+	// Signal the target call to dequeue with "bridged" result and partner SID
 	if targetRunner != nil {
 		select {
-		case targetRunner.dequeueCh <- "bridged":
+		case targetRunner.dequeueCh <- dequeueResult{result: "bridged", partnerSID: r.call.SID}:
 		default:
 		}
 	}
@@ -595,6 +609,17 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 			case <-ctx.Done():
 				goto bridgeEnded
 			case <-r.hangupCh:
+				// This call hung up, notify the target
+				if targetRunner != nil {
+					select {
+					case targetRunner.bridgeEndCh <- struct{}{}:
+					default:
+					}
+				}
+				goto bridgeEnded
+			case <-r.bridgeEndCh:
+				// Target call hung up, end this bridge
+				r.addEvent("dial.queue.partner_hangup", map[string]any{})
 				goto bridgeEnded
 			case digits := <-r.gatherCh:
 				// Check if star is pressed
@@ -602,6 +627,13 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 					r.addEvent("dial.hangup_on_star", map[string]any{
 						"digits": digits,
 					})
+					// Notify the target
+					if targetRunner != nil {
+						select {
+						case targetRunner.bridgeEndCh <- struct{}{}:
+						default:
+						}
+					}
 					goto bridgeEnded
 				}
 			}
@@ -611,6 +643,16 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 		select {
 		case <-ctx.Done():
 		case <-r.hangupCh:
+			// This call hung up, notify the target
+			if targetRunner != nil {
+				select {
+				case targetRunner.bridgeEndCh <- struct{}{}:
+				default:
+				}
+			}
+		case <-r.bridgeEndCh:
+			// Target call hung up, end this bridge
+			r.addEvent("dial.queue.partner_hangup", map[string]any{})
 		}
 	}
 
@@ -666,6 +708,7 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 	// Wait for dequeue, timeout, or hangup
 	dialStatus := ""
 	queueResult := ""
+	var bridgePartnerSID model.SID
 	urlUpdated := false
 	if dial.HangupOnStar {
 		// Listen for star key to hangup
@@ -685,9 +728,10 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 				urlUpdated = true
 				r.addEvent("dial.queue.interrupted", map[string]any{"reason": "url_updated"})
 				goto queueLeft
-			case result := <-r.dequeueCh:
+			case dqResult := <-r.dequeueCh:
 				dialStatus = "completed"
-				queueResult = result
+				queueResult = dqResult.result
+				bridgePartnerSID = dqResult.partnerSID
 				goto queueLeft
 			case <-r.clock.After(dial.Timeout):
 				dialStatus = "no-answer"
@@ -718,9 +762,10 @@ func (r *CallRunner) waitInDialQueue(ctx context.Context, dial *twiml.Dial, queu
 			queueResult = "url-updated"
 			urlUpdated = true
 			r.addEvent("dial.queue.interrupted", map[string]any{"reason": "url_updated"})
-		case result := <-r.dequeueCh:
+		case dqResult := <-r.dequeueCh:
 			dialStatus = "completed"
-			queueResult = result
+			queueResult = dqResult.result
+			bridgePartnerSID = dqResult.partnerSID
 		case <-r.clock.After(dial.Timeout):
 			dialStatus = "no-answer"
 			queueResult = "timeout"
@@ -752,8 +797,14 @@ queueLeft:
 	if queueResult == "bridged" {
 		bridgeStartTime := r.clock.Now()
 		r.addEvent("dial.queue.bridge_started", map[string]any{
-			"queue": queue.Name,
+			"queue":      queue.Name,
+			"partner_sid": bridgePartnerSID,
 		})
+
+		// Get the bridge partner runner to notify them when we hang up
+		r.state.mu.Lock()
+		partnerRunner := r.state.runners[bridgePartnerSID]
+		r.state.mu.Unlock()
 
 		// Wait for bridge to complete (no timeout during bridge)
 		if dial.HangupOnStar {
@@ -763,10 +814,28 @@ queueLeft:
 				case <-ctx.Done():
 					goto bridgeEnded
 				case <-r.hangupCh:
+					// This call hung up, notify the partner
+					if partnerRunner != nil {
+						select {
+						case partnerRunner.bridgeEndCh <- struct{}{}:
+						default:
+						}
+					}
+					goto bridgeEnded
+				case <-r.bridgeEndCh:
+					// Partner call hung up, end this bridge
+					r.addEvent("dial.queue.partner_hangup", map[string]any{})
 					goto bridgeEnded
 				case <-r.urlUpdateCh:
 					urlUpdated = true
 					r.addEvent("dial.queue.bridge_interrupted", map[string]any{"reason": "url_updated"})
+					// Notify partner before leaving
+					if partnerRunner != nil {
+						select {
+						case partnerRunner.bridgeEndCh <- struct{}{}:
+						default:
+						}
+					}
 					goto bridgeEnded
 				case digits := <-r.gatherCh:
 					// Check if star is pressed
@@ -774,6 +843,13 @@ queueLeft:
 						r.addEvent("dial.hangup_on_star", map[string]any{
 							"digits": digits,
 						})
+						// Notify partner before leaving
+						if partnerRunner != nil {
+							select {
+							case partnerRunner.bridgeEndCh <- struct{}{}:
+							default:
+							}
+						}
 						goto bridgeEnded
 					}
 				}
@@ -782,9 +858,26 @@ queueLeft:
 			select {
 			case <-ctx.Done():
 			case <-r.hangupCh:
+				// This call hung up, notify the partner
+				if partnerRunner != nil {
+					select {
+					case partnerRunner.bridgeEndCh <- struct{}{}:
+					default:
+					}
+				}
+			case <-r.bridgeEndCh:
+				// Partner call hung up, end this bridge
+				r.addEvent("dial.queue.partner_hangup", map[string]any{})
 			case <-r.urlUpdateCh:
 				urlUpdated = true
 				r.addEvent("dial.queue.bridge_interrupted", map[string]any{"reason": "url_updated"})
+				// Notify partner before leaving
+				if partnerRunner != nil {
+					select {
+					case partnerRunner.bridgeEndCh <- struct{}{}:
+					default:
+					}
+				}
 			}
 		}
 
@@ -860,6 +953,39 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 	}
 
 	r.call.CurrentEndpoint = "conference:" + conferenceDial.Name
+
+	// Send status callbacks if configured
+	if conf.StatusCallback != "" {
+		// Send participant-join callback
+		if r.engine.shouldSendConferenceStatusCallback(conf, "participant-join") {
+			go r.engine.sendConferenceStatusCallback(r.state, conf, "participant-join", &r.call.SID, currentTwimlDocumentURL)
+		} else {
+			conf.Timeline = append(conf.Timeline, model.NewEvent(
+				r.clock.Now(),
+				"webhook.conference_status_callback_skipped",
+				map[string]any{
+					"event":    "participant-join",
+					"call_sid": r.call.SID,
+				},
+			))
+		}
+
+		// Send conference-start callback if conference just started
+		if shouldStart {
+			if r.engine.shouldSendConferenceStatusCallback(conf, "conference-start") {
+				go r.engine.sendConferenceStatusCallback(r.state, conf, "conference-start", nil, currentTwimlDocumentURL)
+			} else {
+				conf.Timeline = append(conf.Timeline, model.NewEvent(
+					r.clock.Now(),
+					"webhook.conference_status_callback_skipped",
+					map[string]any{
+						"event": "conference-start",
+					},
+				))
+			}
+		}
+	}
+
 	r.state.mu.Unlock()
 
 	r.addEvent("joined.conference", map[string]any{
@@ -876,17 +1002,23 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 			select {
 			case <-ctx.Done():
 				r.state.mu.Lock()
-				r.removeFromConference(conf)
+				r.removeFromConference(conf, currentTwimlDocumentURL)
 				r.state.mu.Unlock()
 				goto conferenceEnded
 			case <-r.hangupCh:
 				r.state.mu.Lock()
-				r.removeFromConference(conf)
+				r.removeFromConference(conf, currentTwimlDocumentURL)
 				r.state.mu.Unlock()
 				goto conferenceEnded
 			case <-r.urlUpdateCh:
 				urlUpdated = true
 				r.addEvent("dial.conference.interrupted", map[string]any{"reason": "url_updated"})
+				goto conferenceEnded
+			case <-r.conferenceCompleteCh:
+				r.addEvent("dial.conference.completed", map[string]any{"reason": "completed_via_api"})
+				r.state.mu.Lock()
+				r.removeFromConference(conf, currentTwimlDocumentURL)
+				r.state.mu.Unlock()
 				goto conferenceEnded
 			case digits := <-r.gatherCh:
 				// Check if star is pressed by caller to leave conference
@@ -895,7 +1027,7 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 						"digits": digits,
 					})
 					r.state.mu.Lock()
-					r.removeFromConference(conf)
+					r.removeFromConference(conf, currentTwimlDocumentURL)
 					r.state.mu.Unlock()
 					goto conferenceEnded
 				}
@@ -905,17 +1037,23 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 		select {
 		case <-ctx.Done():
 			r.state.mu.Lock()
-			r.removeFromConference(conf)
+			r.removeFromConference(conf, currentTwimlDocumentURL)
 			r.state.mu.Unlock()
 			goto conferenceEnded
 		case <-r.hangupCh:
 			r.state.mu.Lock()
-			r.removeFromConference(conf)
+			r.removeFromConference(conf, currentTwimlDocumentURL)
 			r.state.mu.Unlock()
 			goto conferenceEnded
 		case <-r.urlUpdateCh:
 			urlUpdated = true
 			r.addEvent("dial.conference.interrupted", map[string]any{"reason": "url_updated"})
+			goto conferenceEnded
+		case <-r.conferenceCompleteCh:
+			r.addEvent("dial.conference.completed", map[string]any{"reason": "completed_via_api"})
+			r.state.mu.Lock()
+			r.removeFromConference(conf, currentTwimlDocumentURL)
+			r.state.mu.Unlock()
 			goto conferenceEnded
 		}
 	}
@@ -1021,18 +1159,28 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 	agentRunner := r.state.runners[agentCallSID]
 	r.state.mu.Unlock()
 
-	// Signal the agent call to dequeue with "bridged" result
+	// Signal the agent call to dequeue with "bridged" result and partner SID
 	if agentRunner != nil {
 		select {
-		case agentRunner.dequeueCh <- "bridged":
+		case agentRunner.dequeueCh <- dequeueResult{result: "bridged", partnerSID: r.call.SID}:
 		default:
 		}
 	}
 
-	// Simulate bridge - wait for hangup (no timeout for enqueued callers)
+	// Bridge - wait for hangup (no timeout for enqueued callers)
 	select {
 	case <-ctx.Done():
 	case <-r.hangupCh:
+		// This call hung up, notify the agent
+		if agentRunner != nil {
+			select {
+			case agentRunner.bridgeEndCh <- struct{}{}:
+			default:
+			}
+		}
+	case <-r.bridgeEndCh:
+		// Agent call hung up, end this bridge
+		r.addEvent("enqueue.partner_hangup", map[string]any{})
 	}
 
 	endTime := r.clock.Now()
@@ -1191,6 +1339,7 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 	// 3. Context is cancelled
 	// 4. URL is updated
 	queueResult := ""
+	var bridgePartnerSID model.SID
 	urlUpdated := false
 	select {
 	case <-ctx.Done():
@@ -1201,8 +1350,9 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 		queueResult = "url-updated"
 		urlUpdated = true
 		r.addEvent("enqueue.interrupted", map[string]any{"reason": "url_updated"})
-	case result := <-r.dequeueCh:
-		queueResult = result
+	case dqResult := <-r.dequeueCh:
+		queueResult = dqResult.result
+		bridgePartnerSID = dqResult.partnerSID
 	}
 
 	// Calculate time in queue (time waiting before bridge)
@@ -1225,16 +1375,39 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 	if queueResult == "bridged" {
 		bridgeStartTime := r.clock.Now()
 		r.addEvent("enqueue.bridge_started", map[string]any{
-			"queue": enqueue.Name,
+			"queue":       enqueue.Name,
+			"partner_sid": bridgePartnerSID,
 		})
+
+		// Get the bridge partner runner to notify them when we hang up
+		r.state.mu.Lock()
+		partnerRunner := r.state.runners[bridgePartnerSID]
+		r.state.mu.Unlock()
 
 		// Wait for bridge to complete
 		select {
 		case <-ctx.Done():
 		case <-r.hangupCh:
+			// This call hung up, notify the partner
+			if partnerRunner != nil {
+				select {
+				case partnerRunner.bridgeEndCh <- struct{}{}:
+				default:
+				}
+			}
+		case <-r.bridgeEndCh:
+			// Partner call hung up, end this bridge
+			r.addEvent("enqueue.partner_hangup", map[string]any{})
 		case <-r.urlUpdateCh:
 			urlUpdated = true
 			r.addEvent("enqueue.bridge_interrupted", map[string]any{"reason": "url_updated"})
+			// Notify partner before leaving
+			if partnerRunner != nil {
+				select {
+				case partnerRunner.bridgeEndCh <- struct{}{}:
+				default:
+				}
+			}
 		}
 
 		bridgeEndTime := r.clock.Now()
@@ -1499,7 +1672,7 @@ func (r *CallRunner) removeFromQueue(queue *model.Queue) {
 	}
 }
 
-func (r *CallRunner) removeFromConference(conf *model.Conference) {
+func (r *CallRunner) removeFromConference(conf *model.Conference, currentTwimlDocumentURL string) {
 	// Check if this participant has EndConferenceOnExit=true
 	endConferenceOnExit := false
 	if r.state.participantStates[conf.SID] != nil {
@@ -1508,6 +1681,7 @@ func (r *CallRunner) removeFromConference(conf *model.Conference) {
 		}
 	}
 
+	conferenceEnded := false
 	for i, sid := range conf.Participants {
 		if sid == r.call.SID {
 			conf.Participants = append(conf.Participants[:i], conf.Participants[i+1:]...)
@@ -1515,14 +1689,31 @@ func (r *CallRunner) removeFromConference(conf *model.Conference) {
 				r.clock.Now(),
 				"participant.left",
 				map[string]any{
-					"call_sid":              r.call.SID,
+					"call_sid":               r.call.SID,
 					"end_conference_on_exit": endConferenceOnExit,
 				},
 			))
 
+			// Send participant-leave callback if configured
+			if conf.StatusCallback != "" {
+				if r.engine.shouldSendConferenceStatusCallback(conf, "participant-leave") {
+					go r.engine.sendConferenceStatusCallback(r.state, conf, "participant-leave", &r.call.SID, currentTwimlDocumentURL)
+				} else {
+					conf.Timeline = append(conf.Timeline, model.NewEvent(
+						r.clock.Now(),
+						"webhook.conference_status_callback_skipped",
+						map[string]any{
+							"event":    "participant-leave",
+							"call_sid": r.call.SID,
+						},
+					))
+				}
+			}
+
 			// If this participant has EndConferenceOnExit=true, end the conference
 			// Or if last participant, mark conference completed
-			if endConferenceOnExit || len(conf.Participants) == 0 {
+			// Only mark as ended if not already completed
+			if (endConferenceOnExit || len(conf.Participants) == 0) && conf.Status != model.ConferenceCompleted {
 				conf.Status = model.ConferenceCompleted
 				now := r.clock.Now()
 				conf.EndedAt = &now
@@ -1535,8 +1726,24 @@ func (r *CallRunner) removeFromConference(conf *model.Conference) {
 					"conference.ended",
 					map[string]any{"reason": reason},
 				))
+				conferenceEnded = true
 			}
 			break
+		}
+	}
+
+	// Send conference-end callback if conference ended
+	if conferenceEnded && conf.StatusCallback != "" {
+		if r.engine.shouldSendConferenceStatusCallback(conf, "conference-end") {
+			go r.engine.sendConferenceStatusCallback(r.state, conf, "conference-end", nil, currentTwimlDocumentURL)
+		} else {
+			conf.Timeline = append(conf.Timeline, model.NewEvent(
+				r.clock.Now(),
+				"webhook.conference_status_callback_skipped",
+				map[string]any{
+					"event": "conference-end",
+				},
+			))
 		}
 	}
 

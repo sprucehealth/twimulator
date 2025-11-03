@@ -104,6 +104,7 @@ func NewConsoleServer(e engine.Engine, addr string) (*ConsoleServer, error) {
 	mux.HandleFunc("/", cs.handleSubAccounts)
 	mux.HandleFunc("/subaccounts/", cs.handleSubAccountDetail)
 	mux.HandleFunc("/calls/", cs.handleCallDetail)
+	mux.HandleFunc("/conferences/", cs.handleConferenceDetail)
 	mux.HandleFunc("/numbers/", cs.handleNumberDetail)
 	mux.HandleFunc("/addresses/", cs.handleAddressDetail)
 	mux.HandleFunc("/api/snapshot", cs.handleSnapshot)
@@ -380,9 +381,21 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 
 	snaps := cs.engine.SnapshotAll()
 	var call *model.Call
+	var conferenceInfo *model.Conference
 	for _, snap := range snaps {
 		if c, exists := snap.Calls[model.SID(sid)]; exists {
 			call = c
+			// Check if call is in a conference
+			if strings.HasPrefix(c.CurrentEndpoint, "conference:") {
+				confName := strings.TrimPrefix(c.CurrentEndpoint, "conference:")
+				// Find the conference by name
+				for _, conf := range snap.Conferences {
+					if conf.Name == confName {
+						conferenceInfo = conf
+						break
+					}
+				}
+			}
 			break
 		}
 	}
@@ -392,10 +405,50 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 	}
 
 	data := map[string]any{
-		"Call": call,
+		"Call":       call,
+		"Conference": conferenceInfo,
 	}
 
 	if err := cs.tmpl.ExecuteTemplate(w, "call.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (cs *ConsoleServer) handleConferenceDetail(w http.ResponseWriter, r *http.Request) {
+	sid := strings.TrimPrefix(r.URL.Path, "/conferences/")
+	if sid == "" {
+		http.Error(w, "Conference SID required", http.StatusBadRequest)
+		return
+	}
+
+	snaps := cs.engine.SnapshotAll()
+	var conference *model.Conference
+	var accountSID model.SID
+	for _, snap := range snaps {
+		// Conferences are keyed by name, but we're looking for SID
+		// We need to iterate through all conferences
+		for _, c := range snap.Conferences {
+			if string(c.SID) == sid {
+				conference = c
+				accountSID = c.AccountSID
+				break
+			}
+		}
+		if conference != nil {
+			break
+		}
+	}
+	if conference == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	data := map[string]any{
+		"Conference": conference,
+		"AccountSID": accountSID,
+	}
+
+	if err := cs.tmpl.ExecuteTemplate(w, "conference.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

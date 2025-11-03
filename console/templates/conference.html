@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conference {{.Conference.SID}} - Twimulator Console</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Twimulator Console</h1>
+            <nav>
+                <a href="/">SubAccounts</a>
+                <a href="/api/snapshot" target="_blank">API Snapshot</a>
+            </nav>
+        </header>
+
+        <main>
+            <div class="breadcrumb">
+                <a href="/">SubAccounts</a> &raquo;
+                <a href="/subaccounts/{{.Conference.AccountSID}}">{{.Conference.AccountSID}}</a> &raquo;
+                {{.Conference.SID}}
+            </div>
+
+            <h2>Conference Details</h2>
+
+            <div class="detail-grid">
+                <div class="detail-item">
+                    <label>SID</label>
+                    <div>{{.Conference.SID}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Name</label>
+                    <div><strong>{{.Conference.Name}}</strong></div>
+                </div>
+                <div class="detail-item">
+                    <label>Status</label>
+                    <div><span class="status status-{{.Conference.Status}}">{{.Conference.Status}}</span></div>
+                </div>
+                <div class="detail-item">
+                    <label>Created At</label>
+                    <div>{{.Conference.CreatedAt.Format "2006-01-02 15:04:05"}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Ended At</label>
+                    <div>{{if .Conference.EndedAt}}{{.Conference.EndedAt.Format "15:04:05"}}{{else}}-{{end}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Account SID</label>
+                    <div><a href="/subaccounts/{{.Conference.AccountSID}}">{{.Conference.AccountSID}}</a></div>
+                </div>
+                <div class="detail-item">
+                    <label>Status Callback</label>
+                    <div>{{if .Conference.StatusCallback}}{{.Conference.StatusCallback}}{{else}}-{{end}}</div>
+                </div>
+                <div class="detail-item">
+                    <label>Status Callback Events</label>
+                    <div>{{if .Conference.StatusCallbackEvents}}{{range $i, $e := .Conference.StatusCallbackEvents}}{{if $i}}, {{end}}{{$e}}{{end}}{{else}}-{{end}}</div>
+                </div>
+            </div>
+
+            {{if .Conference.Participants}}
+            <h3>Participants</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Call SID</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Conference.Participants}}
+                    <tr>
+                        <td><a href="/calls/{{.}}">{{.}}</a></td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{end}}
+
+            <h3>Timeline</h3>
+            <div class="timeline">
+                {{range .Conference.Timeline}}
+                <div class="timeline-event">
+                    <div class="timeline-time">{{.Time.Format "15:04:05.000"}}</div>
+                    <div class="timeline-content">
+                        <div class="timeline-type">{{.Type}}</div>
+                        {{if .Detail}}
+                        <div class="timeline-detail">
+                            <pre>{{json .Detail}}</pre>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+                {{end}}
+            </div>
+        </main>
+    </div>
+</body>
+</html>

@@ -48,7 +48,17 @@
                 </div>
                 <div class="detail-item">
                     <label>Current Endpoint</label>
-                    <div>{{if .Call.CurrentEndpoint}}{{.Call.CurrentEndpoint}}{{else}}-{{end}}</div>
+                    <div>
+                        {{if .Call.CurrentEndpoint}}
+                            {{if .Conference}}
+                                <a href="/conferences/{{.Conference.SID}}">{{.Call.CurrentEndpoint}}</a>
+                            {{else}}
+                                {{.Call.CurrentEndpoint}}
+                            {{end}}
+                        {{else}}
+                            -
+                        {{end}}
+                    </div>
                 </div>
                 <div class="detail-item">
                     <label>Start Time</label>

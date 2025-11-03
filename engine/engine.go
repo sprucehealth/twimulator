@@ -1354,7 +1354,7 @@ func (e *EngineImpl) UpdateConference(sid string, params *twilioopenapi.UpdateCo
 	}
 
 	state.mu.Lock()
-	defer state.mu.Lock()
+	defer state.mu.Unlock()
 
 	var conf *model.Conference
 	for _, cnf := range state.conferences {
@@ -1383,6 +1383,16 @@ func (e *EngineImpl) UpdateConference(sid string, params *twilioopenapi.UpdateCo
 					"reason": "updated_via_api",
 				},
 			))
+			// Notify all participants to exit the conference
+			for _, participantSID := range conf.Participants {
+				if runner, exists := state.runners[participantSID]; exists {
+					select {
+					case runner.conferenceCompleteCh <- struct{}{}:
+					default:
+						// Channel full or already signaled
+					}
+				}
+			}
 		case "in-progress":
 			conf.Status = model.ConferenceInProgress
 		}
@@ -1416,7 +1426,7 @@ func (e *EngineImpl) FetchParticipant(conferenceSid string, callSid string, para
 	}
 
 	state.mu.Lock()
-	defer state.mu.Lock()
+	defer state.mu.Unlock()
 
 	var conf *model.Conference
 	for _, cnf := range state.conferences {
@@ -1470,7 +1480,7 @@ func (e *EngineImpl) UpdateParticipant(conferenceSid string, callSid string, par
 	}
 
 	state.mu.Lock()
-	defer state.mu.Lock()
+	defer state.mu.Unlock()
 
 	var conf *model.Conference
 	for _, cnf := range state.conferences {
@@ -1945,7 +1955,7 @@ func (e *EngineImpl) updateCallStatusLocked(state *subAccountState, call *model.
 	// Trigger status callback if configured and user is interested in this event
 	if call.StatusCallback != "" && e.shouldSendStatusCallback(call, newStatus) {
 		// Note: this must stay asynchronous to avoid deadlocks
-		go e.sendStatusCallback(state, call)
+		go e.sendCallStatusCallback(state, call)
 	} else {
 		// skipped status callback
 		call.Timeline = append(call.Timeline, model.NewEvent(
@@ -1995,31 +2005,70 @@ func (e *EngineImpl) shouldSendStatusCallback(call *model.Call, status model.Cal
 	return false
 }
 
-// sendStatusCallback posts to the status callback URL
-func (e *EngineImpl) sendStatusCallback(state *subAccountState, call *model.Call) {
+func (e *EngineImpl) recordError(state *subAccountState, err error) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.errors = append(state.errors, err)
+}
+
+func (e *EngineImpl) addCallEvent(state *subAccountState, call *model.Call, eventType string, detail map[string]any) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	call.Timeline = append(call.Timeline, model.NewEvent(
+		state.clock.Now(),
+		eventType,
+		detail,
+	))
+}
+
+func (e *EngineImpl) addConferenceEvent(state *subAccountState, cnf *model.Conference, eventType string, detail map[string]any) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	cnf.Timeline = append(cnf.Timeline, model.NewEvent(
+		state.clock.Now(),
+		eventType,
+		detail,
+	))
+}
+
+// sendCallStatusCallback posts to the status callback URL
+func (e *EngineImpl) sendCallStatusCallback(state *subAccountState, call *model.Call) {
 	form := e.buildCallbackForm(state.clock, call)
 
 	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
 	defer cancel()
 
 	status, body, headers, err := e.webhook.POST(ctx, call.StatusCallback, form)
+	if err != nil {
+		e.addCallEvent(state, call, "play.error", map[string]any{
+			"url":   call.StatusCallback,
+			"error": err.Error(),
+		})
+		err := fmt.Errorf("failed to fetch play URL %s: %w", call.StatusCallback, err)
+		e.recordError(state, err)
+		return
+	}
 
-	state.mu.Lock()
-	defer state.mu.Unlock()
+	// Check for non-2xx status codes
+	if status < 200 || status >= 300 {
+		e.addCallEvent(state, call, "play.error", map[string]any{
+			"url":    call.StatusCallback,
+			"status": status,
+		})
+		err := fmt.Errorf("play URL %s returned status %d", call.StatusCallback, status)
+		e.recordError(state, err)
+		return
+	}
 
 	// Log the webhook - find and lock the subaccount
-	call.Timeline = append(call.Timeline, model.NewEvent(
-		state.clock.Now(),
-		"webhook.status_callback",
-		map[string]any{
-			"url":         call.StatusCallback,
-			"call_status": string(call.Status),
-			"status":      status,
-			"error":       err,
-			"headers":     headers,
-			"body":        string(body),
-		},
-	))
+	e.addCallEvent(state, call, "webhook.status_callback", map[string]any{
+		"url":         call.StatusCallback,
+		"call_status": string(call.Status),
+		"status":      status,
+		"error":       err,
+		"headers":     headers,
+		"body":        string(body),
+	})
 }
 
 // buildCallbackForm builds form data for Twilio-style callbacks
@@ -2036,6 +2085,97 @@ func (e *EngineImpl) buildCallbackForm(clock Clock, call *model.Call) url.Values
 
 	if call.ParentCallSID != nil {
 		form.Set("ParentCallSid", string(*call.ParentCallSID))
+	}
+
+	return form
+}
+
+// shouldSendConferenceStatusCallback checks if a conference status callback should be sent for the given event
+func (e *EngineImpl) shouldSendConferenceStatusCallback(conf *model.Conference, eventType string) bool {
+	// If no events specified, send for all events (default behavior)
+	if len(conf.StatusCallbackEvents) == 0 {
+		return true
+	}
+
+	// Map internal event names to API event names
+	// Internal events: conference-start, conference-end, participant-join, participant-leave
+	// API events: start, end, join, leave
+	var apiEventName string
+	switch eventType {
+	case "conference-start":
+		apiEventName = "start"
+	case "conference-end":
+		apiEventName = "end"
+	case "participant-join":
+		apiEventName = "join"
+	case "participant-leave":
+		apiEventName = "leave"
+	default:
+		apiEventName = eventType
+	}
+
+	// Check if this event is in the requested events list
+	for _, event := range conf.StatusCallbackEvents {
+		if event == apiEventName {
+			return true
+		}
+	}
+
+	return false
+}
+
+// sendConferenceStatusCallback posts to the conference status callback URL
+func (e *EngineImpl) sendConferenceStatusCallback(state *subAccountState, conf *model.Conference, eventType string, callSID *model.SID, currentTwimlDocumentURL string) {
+	form := e.buildConferenceCallbackForm(state.clock, conf, eventType, callSID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
+	defer cancel()
+	resolvedURL, urlErr := resolveURL(currentTwimlDocumentURL, conf.StatusCallback)
+	if urlErr != nil {
+		e.addConferenceEvent(state, conf, "webhook.status_url_error", map[string]any{
+			"status_url": conf.StatusCallback,
+			"error":      urlErr.Error(),
+		})
+		err := fmt.Errorf("failed to resolve status URL %s: %w", conf.StatusCallback, urlErr)
+		e.recordError(state, err)
+		return
+	}
+	status, body, headers, err := e.webhook.POST(ctx, resolvedURL, form)
+	// Check for non-2xx status codes
+	if status < 200 || status >= 300 {
+		e.addConferenceEvent(state, conf, "play.error", map[string]any{
+			"url":    conf.StatusCallback,
+			"status": status,
+		})
+		err := fmt.Errorf("play URL %s returned status %d", conf.StatusCallback, status)
+		e.recordError(state, err)
+		return
+	}
+	// Log the webhook
+	e.addConferenceEvent(state, conf, "webhook.conference_status_callback",
+		map[string]any{
+			"url":                   resolvedURL,
+			"status_callback_event": eventType,
+			"call_sid":              callSID,
+			"status":                status,
+			"error":                 err,
+			"headers":               headers,
+			"body":                  string(body),
+		})
+}
+
+// buildConferenceCallbackForm builds form data for conference status callbacks
+func (e *EngineImpl) buildConferenceCallbackForm(clock Clock, conf *model.Conference, eventType string, callSID *model.SID) url.Values {
+	form := url.Values{}
+	form.Set("ConferenceSid", string(conf.SID))
+	form.Set("FriendlyName", conf.Name)
+	form.Set("StatusCallbackEvent", eventType)
+	form.Set("AccountSid", string(conf.AccountSID))
+	form.Set("Timestamp", clock.Now().Format(time.RFC3339))
+
+	// For participant events (join/leave), include the CallSid
+	if callSID != nil && (eventType == "participant-join" || eventType == "participant-leave") {
+		form.Set("CallSid", string(*callSID))
 	}
 
 	return form
@@ -2065,14 +2205,21 @@ func (e *EngineImpl) getOrCreateQueueLocked(state *subAccountState, accountSID m
 }
 
 // getOrCreateConferenceLocked gets or creates a conference for a subaccount. Caller must hold state.mu.
-func (e *EngineImpl) getOrCreateConferenceLocked(state *subAccountState, accountSID model.SID, name string) *model.Conference {
-	if conf, exists := state.conferences[name]; exists {
+func (e *EngineImpl) getOrCreateConferenceLocked(state *subAccountState, accountSID model.SID, cnf *twiml.ConferenceDial) *model.Conference {
+	if conf, exists := state.conferences[cnf.Name]; exists {
+		// If conference exists and StatusCallback is provided, update it
+		if cnf.StatusCallback != "" && conf.StatusCallback == "" {
+			conf.StatusCallback = cnf.StatusCallback
+			if cnf.StatusCallbackEvent != "" {
+				conf.StatusCallbackEvents = strings.Fields(cnf.StatusCallbackEvent)
+			}
+		}
 		return conf
 	}
 
 	now := state.clock.Now()
 	conf := &model.Conference{
-		Name:         name,
+		Name:         cnf.Name,
 		SID:          model.NewConferenceSID(),
 		AccountSID:   accountSID,
 		Participants: []model.SID{},
@@ -2080,12 +2227,21 @@ func (e *EngineImpl) getOrCreateConferenceLocked(state *subAccountState, account
 		Timeline:     []model.Event{},
 		CreatedAt:    now,
 	}
+
+	// Store StatusCallback configuration if provided
+	if cnf.StatusCallback != "" {
+		conf.StatusCallback = cnf.StatusCallback
+		if cnf.StatusCallbackEvent != "" {
+			conf.StatusCallbackEvents = strings.Fields(cnf.StatusCallbackEvent)
+		}
+	}
+
 	conf.Timeline = append(conf.Timeline, model.NewEvent(
 		now,
 		"conference.created",
-		map[string]any{"name": name, "sid": conf.SID, "account_sid": accountSID},
+		map[string]any{"name": cnf.Name, "sid": conf.SID, "account_sid": accountSID},
 	))
-	state.conferences[name] = conf
+	state.conferences[cnf.Name] = conf
 	return conf
 }
 
@@ -2118,47 +2274,5 @@ func (e *EngineImpl) getOrCreateConference(accountSID model.SID, cnf *twiml.Conf
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	return e.getOrCreateConferenceLocked(state, accountSID, cnf.Name)
+	return e.getOrCreateConferenceLocked(state, accountSID, cnf)
 }
-
-//
-//// lockCall locks the subaccount containing the call and returns an unlock function
-//func (e *EngineImpl) lockCall(callSID model.SID) func() {
-//	state, _ := e.findCallState(callSID)
-//	if state != nil {
-//		state.mu.Lock()
-//		return func() { state.mu.Unlock() }
-//	}
-//	return func() {}
-//}
-//
-//// rlockCall read-locks the subaccount containing the call and returns an unlock function
-//func (e *EngineImpl) rlockCall(callSID model.SID) func() {
-//	state, _ := e.findCallState(callSID)
-//	if state != nil {
-//		state.mu.RLock()
-//		return func() { state.mu.RUnlock() }
-//	}
-//	return func() {}
-//}
-//
-//// getRunner retrieves a call runner by call SID
-//func (e *EngineImpl) getRunner(callSID model.SID) *CallRunner {
-//	state, _ := e.findCallState(callSID)
-//	if state == nil {
-//		return nil
-//	}
-//
-//	state.mu.RLock()
-//	defer state.mu.RUnlock()
-//	return state.runners[callSID]
-//}
-//
-//// getCallBySID retrieves a call by SID
-//func (e *EngineImpl) getCallBySID(callSID model.SID) *model.Call {
-//	state, call := e.findCallState(callSID)
-//	if state == nil || call == nil {
-//		return nil
-//	}
-//	return call
-//}

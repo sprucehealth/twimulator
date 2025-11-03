@@ -13,9 +13,9 @@ import (
 
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 
-	"twimulator/console"
-	"twimulator/engine"
-	"twimulator/model"
+	"github.com/sprucehealth/twimulator/console"
+	"github.com/sprucehealth/twimulator/engine"
+	"github.com/sprucehealth/twimulator/model"
 )
 
 type subAccountInfo struct {

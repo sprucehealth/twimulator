@@ -91,14 +91,16 @@ type Queue struct {
 
 // Conference represents a conference room
 type Conference struct {
-	Name         string           `json:"name"`
-	SID          SID              `json:"sid"`
-	AccountSID   SID              `json:"account_sid"`
-	Participants []SID            `json:"participants"` // Call SIDs in conference
-	Status       ConferenceStatus `json:"status"`
-	Timeline     []Event          `json:"timeline"`
-	CreatedAt    time.Time        `json:"created_at"`
-	EndedAt      *time.Time       `json:"ended_at,omitempty"`
+	Name                 string           `json:"name"`
+	SID                  SID              `json:"sid"`
+	AccountSID           SID              `json:"account_sid"`
+	Participants         []SID            `json:"participants"` // Call SIDs in conference
+	Status               ConferenceStatus `json:"status"`
+	Timeline             []Event          `json:"timeline"`
+	CreatedAt            time.Time        `json:"created_at"`
+	EndedAt              *time.Time       `json:"ended_at,omitempty"`
+	StatusCallback       string           `json:"status_callback,omitempty"`
+	StatusCallbackEvents []string         `json:"status_callback_events,omitempty"` // "start", "end", "join", "leave"
 }
 
 // ParticipantState represents the state of a call within a specific conference

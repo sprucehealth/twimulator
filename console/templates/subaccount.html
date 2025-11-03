@@ -242,8 +242,8 @@
                     <tbody>
                         {{range .Conferences}}
                         <tr>
-                            <td>{{.SID}}</td>
-                            <td><strong>{{.Name}}</strong></td>
+                            <td><a href="/conferences/{{.SID}}">{{.SID}}</a></td>
+                            <td><strong><a href="/conferences/{{.SID}}">{{.Name}}</a></strong></td>
                             <td><span class="status status-{{.Status}}">{{.Status}}</span></td>
                             <td>{{len .Participants}}</td>
                             <td>{{len .Timeline}}</td>
