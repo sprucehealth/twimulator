@@ -619,6 +619,7 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 
 	// Bridge is established - wait until either call hangs up (no timeout during bridge)
 	var dialDuration int
+	urlUpdated := false
 	if dial.HangupOnStar {
 		// Listen for star key to hangup during bridge
 		for {
@@ -637,6 +638,17 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 			case <-r.bridgeEndCh:
 				// Target call hung up, end this bridge
 				r.addCallEvent("dial.queue.partner_hangup", map[string]any{})
+				goto bridgeEnded
+			case <-r.urlUpdateCh:
+				urlUpdated = true
+				r.addCallEvent("dial.queue.bridge_interrupted", map[string]any{"reason": "url_updated"})
+				// Notify the target before leaving
+				if targetRunner != nil {
+					select {
+					case targetRunner.bridgeEndCh <- struct{}{}:
+					default:
+					}
+				}
 				goto bridgeEnded
 			case digits := <-r.gatherCh:
 				// Check if star is pressed
@@ -670,6 +682,16 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 		case <-r.bridgeEndCh:
 			// Target call hung up, end this bridge
 			r.addCallEvent("dial.queue.partner_hangup", map[string]any{})
+		case <-r.urlUpdateCh:
+			urlUpdated = true
+			r.addCallEvent("dial.queue.bridge_interrupted", map[string]any{"reason": "url_updated"})
+			// Notify the target before leaving
+			if targetRunner != nil {
+				select {
+				case targetRunner.bridgeEndCh <- struct{}{}:
+				default:
+				}
+			}
 		}
 	}
 
@@ -695,6 +717,12 @@ bridgeEnded:
 	form.Set("QueueResult", "bridged")
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", targetQueueTime))
+
+	// If URL was updated, skip TwiML execution
+	if urlUpdated {
+		_ = r.executeActionCallback(ctx, dial.Method, dial.Action, form, currentTwimlDocumentURL, true)
+		return ErrURLUpdated
+	}
 
 	return r.executeActionCallback(ctx, dial.Method, dial.Action, form, currentTwimlDocumentURL, false)
 }
@@ -1192,6 +1220,7 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 	}
 
 	// Bridge - wait for hangup (no timeout for enqueued callers)
+	urlUpdated := false
 	select {
 	case <-ctx.Done():
 	case <-r.hangupCh:
@@ -1205,6 +1234,16 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 	case <-r.bridgeEndCh:
 		// Agent call hung up, end this bridge
 		r.addCallEvent("enqueue.partner_hangup", map[string]any{})
+	case <-r.urlUpdateCh:
+		urlUpdated = true
+		r.addCallEvent("enqueue.bridge_interrupted", map[string]any{"reason": "url_updated"})
+		// Notify the agent before leaving
+		if agentRunner != nil {
+			select {
+			case agentRunner.bridgeEndCh <- struct{}{}:
+			default:
+			}
+		}
 	}
 
 	endTime := r.clock.Now()
@@ -1221,6 +1260,12 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 	form.Set("QueueResult", "bridged")
 	form.Set("QueueSid", string(queueSID))
 	form.Set("QueueTime", fmt.Sprintf("%d", queueTime))
+
+	// If URL was updated, skip TwiML execution
+	if urlUpdated {
+		_ = r.executeActionCallback(ctx, enqueue.Method, enqueue.Action, form, currentTwimlDocumentURL, true)
+		return ErrURLUpdated
+	}
 
 	return r.executeActionCallback(ctx, enqueue.Method, enqueue.Action, form, currentTwimlDocumentURL, false)
 }
