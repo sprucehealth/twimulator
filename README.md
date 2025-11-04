@@ -3,6 +3,11 @@
 
 A Twilio simulator/emulator for testing Twilio voice applications locally without making real API calls or incurring costs.
 
+## License
+
+This project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later).
+See [LICENSE](./LICENSE) for full details.
+
 ## Status
 ⚠️ This repository is in active development and may not be ready for use.
 
