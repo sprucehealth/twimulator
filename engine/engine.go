@@ -419,17 +419,14 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		call.Variables["machine_detection"] = *params.MachineDetection
 	}
 
-	call.Timeline = append(call.Timeline, model.NewEvent(
-		now,
-		"call.created",
-		map[string]any{
-			"sid":    call.SID,
-			"from":   call.From,
-			"to":     call.To,
-			"status": call.Status,
-			"params": params,
-		},
-	))
+	// Record event
+	e.addCallEventLocked(state, call, "call.created", map[string]any{
+		"sid":    call.SID,
+		"from":   call.From,
+		"to":     call.To,
+		"status": call.Status,
+		"params": params,
+	})
 
 	state.calls[call.SID] = call
 
@@ -500,17 +497,14 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 		StatusCallbackEvents: []model.CallStatus{model.CallCompleted}, // Twiml application only sends the completed event
 	}
 
-	call.Timeline = append(call.Timeline, model.NewEvent(
-		now,
-		"call.created",
-		map[string]any{
-			"sid":         call.SID,
-			"from":        call.From,
-			"to":          call.To,
-			"status":      call.Status,
-			"application": app.SID,
-		},
-	))
+	// Record event
+	e.addCallEventLocked(state, call, "call.created", map[string]any{
+		"sid":         call.SID,
+		"from":        call.From,
+		"to":          call.To,
+		"status":      call.Status,
+		"application": app.SID,
+	})
 
 	state.calls[call.SID] = call
 
@@ -1064,8 +1058,9 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 		}
 	}
 
+	// Record event if there were updates
 	if len(updatedFields) > 0 {
-		call.Timeline = append(call.Timeline, model.NewEvent(now, "call.updated", updatedFields))
+		e.addCallEventLocked(state, call, "call.updated", updatedFields)
 	}
 
 	if needHangup {
@@ -1101,6 +1096,7 @@ func (e *EngineImpl) AnswerCall(subaccountSID, callSID model.SID) error {
 
 	state.mu.RLock()
 	defer state.mu.RUnlock()
+
 	call, exists := state.calls[callSID]
 	if !exists {
 		return notFoundError(callSID)
@@ -1109,6 +1105,11 @@ func (e *EngineImpl) AnswerCall(subaccountSID, callSID model.SID) error {
 		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
 	}
 	runner := state.runners[callSID]
+
+	// Record event
+	e.addCallEventLocked(state, call, "call.answered", map[string]any{
+		"call_sid": callSID,
+	})
 
 	if runner != nil {
 		select {
@@ -1133,6 +1134,7 @@ func (e *EngineImpl) SetCallBusy(subaccountSID, callSID model.SID) error {
 
 	state.mu.RLock()
 	defer state.mu.RUnlock()
+
 	call, exists := state.calls[callSID]
 	if !exists {
 		return notFoundError(callSID)
@@ -1141,6 +1143,11 @@ func (e *EngineImpl) SetCallBusy(subaccountSID, callSID model.SID) error {
 		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
 	}
 	runner := state.runners[callSID]
+
+	// Record event
+	e.addCallEventLocked(state, call, "call.busy", map[string]any{
+		"call_sid": callSID,
+	})
 
 	if runner != nil {
 		select {
@@ -1165,6 +1172,7 @@ func (e *EngineImpl) SetCallFailed(subaccountSID, callSID model.SID) error {
 
 	state.mu.RLock()
 	defer state.mu.RUnlock()
+
 	call, exists := state.calls[callSID]
 	if !exists {
 		return notFoundError(callSID)
@@ -1173,6 +1181,11 @@ func (e *EngineImpl) SetCallFailed(subaccountSID, callSID model.SID) error {
 		return fmt.Errorf("call %s is not in ringing state (current: %s)", callSID, call.Status)
 	}
 	runner := state.runners[callSID]
+
+	// Record event
+	e.addCallEventLocked(state, call, "call.failed", map[string]any{
+		"call_sid": callSID,
+	})
 
 	if runner != nil {
 		select {
@@ -1197,21 +1210,27 @@ func (e *EngineImpl) Hangup(subaccountSID, callSID model.SID) error {
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	call, exists := state.calls[callSID]
 	if !exists {
 		return notFoundError(callSID)
 	}
 	runner := state.runners[callSID]
 
-	if runner != nil {
-		runner.Hangup()
-	}
-
 	// Update call status
 	if call.Status != model.CallCompleted {
 		e.updateCallStatusLocked(state, call, model.CallCompleted)
 		now := state.clock.Now()
 		call.EndedAt = &now
+	}
+
+	// Record event
+	e.addCallEventLocked(state, call, "call.hangup", map[string]any{
+		"call_sid": callSID,
+	})
+
+	if runner != nil {
+		runner.Hangup()
 	}
 
 	return nil
@@ -1230,7 +1249,8 @@ func (e *EngineImpl) SendDigits(subaccountSID, callSID model.SID, digits string)
 
 	state.mu.RLock()
 	defer state.mu.RUnlock()
-	_, exists = state.calls[callSID]
+
+	call, exists := state.calls[callSID]
 	if !exists {
 		return notFoundError(callSID)
 	}
@@ -1238,6 +1258,12 @@ func (e *EngineImpl) SendDigits(subaccountSID, callSID model.SID, digits string)
 	if runner == nil {
 		return notFoundError(callSID)
 	}
+
+	// Record event
+	e.addCallEventLocked(state, call, "call.digits_sent", map[string]any{
+		"call_sid": callSID,
+		"digits":   digits,
+	})
 
 	runner.SendDigits(digits)
 	return nil
@@ -2022,6 +2048,10 @@ func (e *EngineImpl) recordError(state *subAccountState, err error) {
 func (e *EngineImpl) addCallEvent(state *subAccountState, call *model.Call, eventType string, detail map[string]any) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	e.addCallEventLocked(state, call, eventType, detail)
+}
+
+func (e *EngineImpl) addCallEventLocked(state *subAccountState, call *model.Call, eventType string, detail map[string]any) {
 	call.Timeline = append(call.Timeline, model.NewEvent(
 		state.clock.Now(),
 		eventType,
