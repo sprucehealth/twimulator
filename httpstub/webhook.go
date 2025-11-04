@@ -14,6 +14,7 @@ import (
 type WebhookClient interface {
 	POST(ctx context.Context, url string, form url.Values) (status int, body []byte, headers http.Header, err error)
 	GET(ctx context.Context, url string) (status int, body []byte, headers http.Header, err error)
+	HEAD(ctx context.Context, url string) (status int, headers http.Header, err error)
 }
 
 // DefaultWebhookClient is the default implementation using http.Client
@@ -82,6 +83,25 @@ func (c *DefaultWebhookClient) GET(ctx context.Context, targetURL string) (statu
 	return resp.StatusCode, body, resp.Header, nil
 }
 
+// HEAD makes an HTTP HEAD request (only fetches headers, no body)
+func (c *DefaultWebhookClient) HEAD(ctx context.Context, targetURL string) (status int, headers http.Header, err error) {
+	req, err := http.NewRequestWithContext(ctx, "HEAD", targetURL, nil)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "Twimulator/1.0")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// HEAD responses have no body, so we don't read it
+	return resp.StatusCode, resp.Header, nil
+}
+
 // MockWebhookClient is a test double for capturing webhook calls
 type MockWebhookClient struct {
 	Calls []MockCall
@@ -139,6 +159,24 @@ func (m *MockWebhookClient) GET(ctx context.Context, targetURL string) (status i
 
 	// Default: return empty response for media files
 	return 200, []byte{}, make(http.Header), nil
+}
+
+// HEAD records the call and returns the configured response (no body)
+func (m *MockWebhookClient) HEAD(ctx context.Context, targetURL string) (status int, headers http.Header, err error) {
+	m.Calls = append(m.Calls, MockCall{
+		URL:     targetURL,
+		Form:    nil, // No form data for HEAD requests
+		Time:    time.Now(),
+		Context: ctx,
+	})
+
+	if m.ResponseFunc != nil {
+		status, _, headers, err := m.ResponseFunc(targetURL, nil)
+		return status, headers, err
+	}
+
+	// Default: return 200 OK for media files
+	return 200, make(http.Header), nil
 }
 
 // Reset clears all recorded calls

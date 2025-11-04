@@ -308,17 +308,17 @@ func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play, skipTrac
 		"url": playURL,
 	})
 
-	// Fetch the media URL to ensure it's accessible
+	// Check the media URL to ensure it's accessible (using HEAD to avoid downloading the entire file)
 	reqCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
-	status, _, _, err := r.engine.webhook.GET(reqCtx, playURL)
+	status, _, err := r.engine.webhook.HEAD(reqCtx, playURL)
 	if err != nil {
 		r.addCallEvent("play.error", map[string]any{
 			"url":   playURL,
 			"error": err.Error(),
 		})
-		err := fmt.Errorf("failed to fetch play URL %s: %w", playURL, err)
+		err := fmt.Errorf("failed to check play URL %s: %w", playURL, err)
 		r.recordError(err)
 		return err
 	}
@@ -1532,7 +1532,7 @@ func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redire
 		return err
 	}
 	if skipRedirect {
-		r.addCallEvent("twiml.redirect.skipped", map[string]any{
+		r.addCallEvent("twiml.redirect.execution_skipped", map[string]any{
 			"url":    resolvedURL,
 			"method": redirect.Method,
 		})
