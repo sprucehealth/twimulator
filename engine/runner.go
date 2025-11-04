@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sprucehealth/twimulator/model"
@@ -38,6 +39,7 @@ type CallRunner struct {
 	// State for gather
 	gatherCh             chan string
 	hangupCh             chan struct{}
+	hangupOnce           sync.Once // Ensures hangupCh is closed only once
 	answerCh             chan struct{}
 	busyCh               chan struct{}
 	failedCh             chan struct{}
@@ -57,7 +59,7 @@ func NewCallRunner(call *model.Call, state *subAccountState, engine *EngineImpl,
 		engine:               engine,
 		timeout:              timeout,
 		gatherCh:             make(chan string, 1),
-		hangupCh:             make(chan struct{}, 1),
+		hangupCh:             make(chan struct{}), // No buffer - will be closed to broadcast
 		answerCh:             make(chan struct{}, 1),
 		busyCh:               make(chan struct{}, 1),
 		failedCh:             make(chan struct{}, 1),
@@ -1576,10 +1578,9 @@ func (r *CallRunner) executeHangup(implicit bool) error {
 
 // Hangup signals the runner to hang up
 func (r *CallRunner) Hangup() {
-	select {
-	case r.hangupCh <- struct{}{}:
-	default:
-	}
+	r.hangupOnce.Do(func() {
+		close(r.hangupCh)
+	})
 }
 
 // SendDigits sends digits to the gather
