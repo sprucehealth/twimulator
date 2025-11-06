@@ -1048,14 +1048,8 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 		for {
 			select {
 			case <-ctx.Done():
-				r.state.mu.Lock()
-				r.removeFromConference(conf, currentTwimlDocumentURL)
-				r.state.mu.Unlock()
 				goto conferenceEnded
 			case <-r.hangupCh:
-				r.state.mu.Lock()
-				r.removeFromConference(conf, currentTwimlDocumentURL)
-				r.state.mu.Unlock()
 				goto conferenceEnded
 			case <-r.urlUpdateCh:
 				urlUpdated = true
@@ -1063,9 +1057,6 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 				goto conferenceEnded
 			case <-r.conferenceCompleteCh:
 				r.addCallEvent("dial.conference.completed", map[string]any{"reason": "completed_via_api"})
-				r.state.mu.Lock()
-				r.removeFromConference(conf, currentTwimlDocumentURL)
-				r.state.mu.Unlock()
 				goto conferenceEnded
 			case digits := <-r.gatherCh:
 				// Check if star is pressed by caller to leave conference
@@ -1073,9 +1064,6 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 					r.addCallEvent("dial.hangup_on_star", map[string]any{
 						"digits": digits,
 					})
-					r.state.mu.Lock()
-					r.removeFromConference(conf, currentTwimlDocumentURL)
-					r.state.mu.Unlock()
 					goto conferenceEnded
 				}
 			}
@@ -1083,14 +1071,8 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 	} else {
 		select {
 		case <-ctx.Done():
-			r.state.mu.Lock()
-			r.removeFromConference(conf, currentTwimlDocumentURL)
-			r.state.mu.Unlock()
 			goto conferenceEnded
 		case <-r.hangupCh:
-			r.state.mu.Lock()
-			r.removeFromConference(conf, currentTwimlDocumentURL)
-			r.state.mu.Unlock()
 			goto conferenceEnded
 		case <-r.urlUpdateCh:
 			urlUpdated = true
@@ -1098,13 +1080,13 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 			goto conferenceEnded
 		case <-r.conferenceCompleteCh:
 			r.addCallEvent("dial.conference.completed", map[string]any{"reason": "completed_via_api"})
-			r.state.mu.Lock()
-			r.removeFromConference(conf, currentTwimlDocumentURL)
-			r.state.mu.Unlock()
 			goto conferenceEnded
 		}
 	}
 conferenceEnded:
+	r.state.mu.Lock()
+	r.removeFromConference(conf, currentTwimlDocumentURL)
+	r.state.mu.Unlock()
 	// Call action callback
 	r.state.mu.RLock()
 	form := url.Values{}
