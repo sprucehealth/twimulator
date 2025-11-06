@@ -11,12 +11,20 @@ type Node interface {
 	isNode()
 }
 
+type NodeWithChildren interface {
+	ChildNodes() []Node
+}
+
 // Response is the root TwiML element
 type Response struct {
 	Children []Node
 }
 
 func (Response) isNode() {}
+
+func (r Response) ChildNodes() []Node {
+	return r.Children
+}
 
 // Say outputs text-to-speech
 type Say struct {
@@ -59,6 +67,10 @@ type Gather struct {
 
 func (Gather) isNode() {}
 
+func (g Gather) ChildNodes() []Node {
+	return g.Children
+}
+
 // Dial connects to another party
 type Dial struct {
 	Action                  string
@@ -71,6 +83,10 @@ type Dial struct {
 }
 
 func (Dial) isNode() {}
+
+func (d Dial) ChildNodes() []Node {
+	return d.Children
+}
 
 // Enqueue adds caller to a queue
 type Enqueue struct {
