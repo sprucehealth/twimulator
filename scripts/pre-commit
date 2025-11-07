@@ -1,0 +1,39 @@
+#!/bin/bash
+# Pre-commit hook to check for GPL-3.0-or-later license headers using addlicense
+
+set -e
+
+echo "🔍 Checking for license headers..."
+
+# Check if addlicense is installed
+if ! command -v addlicense &> /dev/null; then
+    echo "❌ ERROR: addlicense is not installed"
+    echo "💡 Install it with: go install github.com/google/addlicense@latest"
+    exit 1
+fi
+
+# Get list of staged source files
+staged_files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(go|html|css)$' || true)
+
+if [ -z "$staged_files" ]; then
+    echo "✓ No source files to check"
+    exit 0
+fi
+
+# Run addlicense check on staged files
+if ! echo "$staged_files" | xargs addlicense -check -c "Spruce Health" -s -l gpl-3.0-or-later 2>&1; then
+    echo ""
+    echo "❌ ERROR: Some files are missing GPL-3.0-or-later license headers"
+    echo ""
+    echo "💡 To add license headers automatically, run:"
+    echo "   addlicense -c \"Spruce Health\" -s -l gpl-3.0-or-later <file_names>"
+    echo ""
+    echo "Or to add to all files:"
+    echo "   addlicense -c \"Spruce Health\" -s -l gpl-3.0-or-later -ignore \".git/**\" -ignore \"vendor/**\" -ignore \".idea/**\" -ignore \"**/*.md\" ."
+    echo ""
+    echo "Then stage the files again and retry the commit."
+    exit 1
+fi
+
+echo "✓ All staged source files have license headers"
+exit 0
