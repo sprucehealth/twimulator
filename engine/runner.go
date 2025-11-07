@@ -162,6 +162,9 @@ func (r *CallRunner) answer(ctx context.Context) {
 			r.updateStatus(model.CallFailed)
 			return
 		}
+		// if we reach here, the call is completed
+		r.Hangup()
+		r.addCallEvent("call.completed.no_more_twiml", map[string]any{})
 
 		// TwiML execution completed, wait for hangup or URL update
 		select {
