@@ -356,19 +356,7 @@ func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause, skipT
 	r.addCallEvent("twiml.pause", map[string]any{
 		"length": pause.Length.Seconds(),
 	})
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-r.hangupCh:
-		return nil
-	case <-r.urlUpdateCh:
-		// URL updated, skip through pause
-		r.addCallEvent("pause.interrupted", map[string]any{"reason": "url_updated"})
-		return ErrURLUpdated
-	case <-r.clock.After(pause.Length):
-		return nil
-	}
+	return nil
 }
 
 func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, currentTwimlDocumentURL string, terminated *bool) error {
