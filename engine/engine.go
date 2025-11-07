@@ -1252,7 +1252,6 @@ func (e *EngineImpl) SendDigits(subaccountSID, callSID model.SID, digits string)
 	}
 
 	state.mu.RLock()
-	defer state.mu.RUnlock()
 
 	call, exists := state.calls[callSID]
 	if !exists {
@@ -1268,7 +1267,7 @@ func (e *EngineImpl) SendDigits(subaccountSID, callSID model.SID, digits string)
 		"call_sid": callSID,
 		"digits":   digits,
 	})
-
+	state.mu.RUnlock()
 	runner.SendDigits(digits)
 	return nil
 }
@@ -1895,33 +1894,6 @@ func (e *EngineImpl) Close() error {
 	}
 	return nil
 }
-
-// getClockForAccount returns the clock for a specific subaccount,
-// or the default clock if no subaccount-specific clock is set
-//func (e *EngineImpl) getClockForAccount(accountSID model.SID) Clock {
-//	if clock, exists := e.subAccountClocks[accountSID]; exists {
-//		return clock
-//	}
-//	return e.defaultClock
-//}
-
-// findCallState searches all subaccounts for a call and returns its state and the call.
-// Returns nil if the call is not found.
-//func (e *EngineImpl) findCallState(callSID model.SID) (*subAccountState, *model.Call) {
-//	e.subAccountsMu.RLock()
-//	defer e.subAccountsMu.RUnlock()
-//
-//	for _, state := range e.subAccounts {
-//		state.mu.RLock()
-//		call, exists := state.calls[callSID]
-//		if exists {
-//			state.mu.RUnlock()
-//			return state, call
-//		}
-//		state.mu.RUnlock()
-//	}
-//	return nil, nil
-//}
 
 // SetClockForAccount sets a custom clock for a specific subaccount (testing only)
 func (e *EngineImpl) SetClockForAccount(accountSID model.SID, clock Clock) error {

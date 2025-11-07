@@ -456,6 +456,7 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 					r.addCallEvent("gather.finish_key_pressed", map[string]any{
 						"collected_digits": collectedDigits,
 						"finish_key":       digit,
+						"all_digits":       digits,
 					})
 					goto gatherComplete
 				}
@@ -466,6 +467,7 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 					"digit":            digit,
 					"collected_digits": collectedDigits,
 					"target_digits":    gather.NumDigits,
+					"all_digits":       digits,
 				})
 
 				// Check if we've reached numDigits
@@ -473,6 +475,7 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 					r.addCallEvent("gather.num_digits_reached", map[string]any{
 						"collected_digits": collectedDigits,
 						"num_digits":       gather.NumDigits,
+						"all_digits":       digits,
 					})
 					goto gatherComplete
 				}
@@ -1621,7 +1624,6 @@ func (r *CallRunner) Hangup() {
 func (r *CallRunner) SendDigits(digits string) {
 	select {
 	case r.gatherCh <- digits:
-	default:
 	}
 }
 
@@ -1710,6 +1712,9 @@ func (r *CallRunner) executeActionCallback(ctx context.Context, actionMethod, ac
 		r.state.mu.Lock()
 		r.call.Variables["Digits"] = ""
 		r.state.mu.Unlock()
+		r.addCallEvent("digits.cleared", map[string]any{
+			"digits": digits,
+		})
 	}
 
 	if skipTwimlExecution {
