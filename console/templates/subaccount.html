@@ -172,8 +172,8 @@
                         {{range .Calls}}
                         <tr>
                             <td><a href="/calls/{{.SID}}">{{.SID}}</a></td>
-                            <td>{{.From}}</td>
-                            <td>{{.To}}</td>
+                            <td class="url-cell">{{.From}}</td>
+                            <td class="url-cell">{{.To}}</td>
                             <td>{{.Direction}}</td>
                             <td><span class="status status-{{.Status}}">{{.Status}}</span></td>
                             <td>{{.StartAt.Format "15:04:05"}}</td>
