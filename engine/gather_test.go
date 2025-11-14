@@ -73,6 +73,7 @@ func TestTwiMLSimpleComparison(t *testing.T) {
 	// Define expected TwiML sequence - that's it!
 	expected := []any{
 		&twiml.Say{
+			Loop:     1,
 			Text:     "Hello world",
 			Voice:    "alice",
 			Language: "",
@@ -81,7 +82,8 @@ func TestTwiMLSimpleComparison(t *testing.T) {
 			Length: 2 * time.Second,
 		},
 		&twiml.Play{
-			URL: "http://test/media/welcome.mp3",
+			Loop: 1,
+			URL:  "http://test/media/welcome.mp3",
 		},
 	}
 
@@ -159,7 +161,7 @@ func TestTwiMLWithGatherSimpleComparison(t *testing.T) {
 	// Also note: "Goodbye" is NOT executed because gathering digits triggers
 	// the action callback, which jumps to new TwiML
 	expected := []any{
-		&twiml.Say{Text: "Welcome", Voice: "", Language: ""},
+		&twiml.Say{Loop: 1, Text: "Welcome", Voice: "", Language: ""},
 		&twiml.Gather{
 			Input:     "dtmf",
 			Timeout:   "5",
@@ -167,8 +169,8 @@ func TestTwiMLWithGatherSimpleComparison(t *testing.T) {
 			Action:    "http://test/gather",
 			Method:    "POST",
 			Children: []twiml.Node{
-				&twiml.Say{Text: "Press 1 for sales", Voice: "", Language: ""},
-				&twiml.Say{Text: "Press 2 for support", Voice: "", Language: ""},
+				&twiml.Say{Loop: 1, Text: "Press 1 for sales", Voice: "", Language: ""},
+				&twiml.Say{Loop: 1, Text: "Press 2 for support", Voice: "", Language: ""},
 			},
 		},
 		// Note: "Goodbye" is skipped because digits were entered

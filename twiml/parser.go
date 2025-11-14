@@ -113,7 +113,12 @@ func parseNode(decoder *xml.Decoder, start *xml.StartElement) (Node, error) {
 }
 
 func parseSay(decoder *xml.Decoder, start *xml.StartElement) (*Say, error) {
-	say := &Say{}
+	say := &Say{
+		// default value for loop is 1. Twilio doc says that Specifying 0 explicitly will cause the <Say> verb to loop
+		// until either the call is hung up or 1000 iterations are performed. This library will execute the say verb
+		// forever if loop is set to 0.
+		Loop: 1,
+	}
 	for _, attr := range start.Attr {
 		switch attr.Name.Local {
 		case "voice":
@@ -140,7 +145,12 @@ func parseSay(decoder *xml.Decoder, start *xml.StartElement) (*Say, error) {
 }
 
 func parsePlay(decoder *xml.Decoder, start *xml.StartElement) (*Play, error) {
-	play := &Play{}
+	play := &Play{
+		// default value for loop is 1. Twilio doc says that Specifying 0 explicitly will cause the <Play> verb to loop
+		// until either the call is hung up or 1000 iterations are performed. This library will execute the play verb
+		// forever if loop is set to 0.
+		Loop: 1,
+	}
 	for _, attr := range start.Attr {
 		switch attr.Name.Local {
 		case "loop":

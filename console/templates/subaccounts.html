@@ -35,6 +35,7 @@
                         <th>Created At</th>
                         <th>Incoming Numbers</th>
                         <th>Applications</th>
+                        <th>Signing Keys</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -54,6 +55,13 @@
                         <td>
                             {{if .Applications}}
                                 {{len .Applications}}
+                            {{else}}
+                                0
+                            {{end}}
+                        </td>
+                        <td>
+                            {{if .SigningKeys}}
+                                {{len .SigningKeys}}
                             {{else}}
                                 0
                             {{end}}

@@ -157,6 +157,37 @@
                 {{end}}
             </section>
 
+            <!-- Signing Keys Section -->
+            <section class="resource-section">
+                <h3>API Signing Keys</h3>
+                {{if .SigningKeys}}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>SID</th>
+                            <th>Friendly Name</th>
+                            <th>Secret</th>
+                            <th>Created</th>
+                            <th>Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .SigningKeys}}
+                        <tr>
+                            <td>{{.SID}}</td>
+                            <td>{{if .FriendlyName}}{{.FriendlyName}}{{else}}&mdash;{{end}}</td>
+                            <td><code style="font-size: 0.85em;">{{.Secret}}</code></td>
+                            <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                            <td>{{.UpdatedAt.Format "2006-01-02 15:04"}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+                {{else}}
+                <p class="empty">No signing keys yet.</p>
+                {{end}}
+            </section>
+
             <!-- Calls Section -->
             <section class="resource-section">
                 <h3>Calls</h3>

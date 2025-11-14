@@ -42,6 +42,7 @@ type accountView struct {
 	Numbers      []numberView
 	Applications []applicationView
 	Addresses    []addressView
+	SigningKeys  []signingKeyView
 }
 
 type numberView struct {
@@ -77,6 +78,14 @@ type addressView struct {
 	Verified         bool
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+type signingKeyView struct {
+	SID          string
+	FriendlyName string
+	Secret       string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // NewConsoleServer creates a new console server
@@ -225,6 +234,18 @@ func (cs *ConsoleServer) handleSubAccounts(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		views[i].Addresses = addresses
+
+		signingKeys := make([]signingKeyView, len(sa.SigningKeys))
+		for idx, key := range sa.SigningKeys {
+			signingKeys[idx] = signingKeyView{
+				SID:          key.SID,
+				FriendlyName: key.FriendlyName,
+				Secret:       key.Secret,
+				CreatedAt:    key.CreatedAt,
+				UpdatedAt:    key.UpdatedAt,
+			}
+		}
+		views[i].SigningKeys = signingKeys
 	}
 
 	sort.SliceStable(views, func(i, j int) bool {
@@ -337,6 +358,18 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 	}
 	view.Addresses = addresses
 
+	signingKeys := make([]signingKeyView, len(subAccountModel.SigningKeys))
+	for idx, key := range subAccountModel.SigningKeys {
+		signingKeys[idx] = signingKeyView{
+			SID:          key.SID,
+			FriendlyName: key.FriendlyName,
+			Secret:       key.Secret,
+			CreatedAt:    key.CreatedAt,
+			UpdatedAt:    key.UpdatedAt,
+		}
+	}
+	view.SigningKeys = signingKeys
+
 	// Get calls for this account from the snapshot
 	calls := make([]*model.Call, 0, len(snap.Calls))
 	for _, call := range snap.Calls {
@@ -366,6 +399,7 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 		"Applications": view.Applications,
 		"Numbers":      numbers,
 		"Addresses":    addresses,
+		"SigningKeys":  signingKeys,
 		"Calls":        calls,
 		"Queues":       queues,
 		"Conferences":  conferences,

@@ -36,10 +36,12 @@ type Engine interface {
 	CreateApplication(params *twilioopenapi.CreateApplicationParams) (*twilioopenapi.ApiV2010Application, error)
 	CreateQueue(params *twilioopenapi.CreateQueueParams) (*twilioopenapi.ApiV2010Queue, error)
 	CreateAddress(params *twilioopenapi.CreateAddressParams) (*twilioopenapi.ApiV2010Address, error)
+	CreateNewSigningKey(params *twilioopenapi.CreateNewSigningKeyParams) (*twilioopenapi.ApiV2010NewSigningKey, error)
 
 	// Core lifecycle
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
 	CreateIncomingCall(accountSID model.SID, from string, to string) (*twilioopenapi.ApiV2010Call, error)
+	CreateIncomingCallWithParams(accountSID model.SID, from string, to string, accessToken string, params map[string]string) (*twilioopenapi.ApiV2010Call, error)
 	UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error)
 	AnswerCall(subaccountSID model.SID, callSID model.SID) error
 	SetCallBusy(subaccountSID model.SID, callSID model.SID) error
@@ -103,6 +105,7 @@ type subAccountState struct {
 	incomingNumbers map[string]*incomingNumber
 	applications    map[model.SID]*applicationRecord
 	addresses       map[model.SID]*model.Address
+	signingKeys     map[string]*model.SigningKey
 	calls           map[model.SID]*model.Call
 	queues          map[string]*model.Queue
 	conferences     map[string]*model.Conference
@@ -232,6 +235,7 @@ func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*
 		incomingNumbers:   make(map[string]*incomingNumber),
 		applications:      make(map[model.SID]*applicationRecord),
 		addresses:         make(map[model.SID]*model.Address),
+		signingKeys:       make(map[string]*model.SigningKey),
 		calls:             make(map[model.SID]*model.Call),
 		queues:            make(map[string]*model.Queue),
 		conferences:       make(map[string]*model.Conference),
@@ -412,7 +416,15 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		Method:               method,
 		StatusCallback:       statusCallback,
 		StatusCallbackEvents: statusEvents,
+		CallbackQueue:        make(chan func(), 10), // Buffered to avoid blocking
 	}
+
+	// Start worker goroutine to process callbacks serially for this call
+	go func() {
+		for fn := range call.CallbackQueue {
+			fn() // Execute callback serially
+		}
+	}()
 
 	if callToken != "" {
 		call.Variables["call_token"] = callToken
@@ -448,6 +460,11 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 
 // CreateIncomingCall simulates an incoming call to a number with an application
 func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to string) (*twilioopenapi.ApiV2010Call, error) {
+	return e.CreateIncomingCallWithParams(accountSID, from, to, "", map[string]string{})
+}
+
+// CreateIncomingCallWithParams simulates an incoming call
+func (e *EngineImpl) CreateIncomingCallWithParams(accountSID model.SID, from string, to string, accessToken string, params map[string]string) (*twilioopenapi.ApiV2010Call, error) {
 	// Get subaccount state
 	e.subAccountsMu.RLock()
 	state, exists := e.subAccounts[accountSID]
@@ -461,21 +478,50 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	// Find the incoming number
-	incomingNum := state.incomingNumbers[to]
-	if incomingNum == nil {
-		return nil, fmt.Errorf("to number %s not provisioned for account %s", to, accountSID)
+	var applicationSID *model.SID
+	if accessToken != "" {
+		// First parse without validation to get the signing key SID
+		decodedToken, err := ParseJWTToken(accessToken, "")
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse access token: %w", err)
+		}
+
+		// Look up the signing key to get the secret
+		var secret string
+		if signingKey, exists := state.signingKeys[decodedToken.SigningKeySid]; exists {
+			secret = signingKey.Secret
+		}
+		// If signing key not found, secret remains empty (validation will be skipped)
+
+		// Now parse with validation (or skip if key not found)
+		appSID, err := ParseJWTForApplicationSID(accessToken, secret)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract application SID from token: %w", err)
+		}
+		appSIDModel := model.SID(appSID)
+		applicationSID = &appSIDModel
 	}
 
-	// Validate the number has an application configured
-	if incomingNum.VoiceApplication == nil {
-		return nil, fmt.Errorf("number %s does not have a voice application configured", to)
-	}
+	if applicationSID == nil && to != "" {
+		// Find the incoming number
+		incomingNum := state.incomingNumbers[to]
+		if incomingNum == nil {
+			return nil, fmt.Errorf("to number %s not provisioned for account %s", to, accountSID)
+		}
 
+		// Validate the number has an application configured
+		if incomingNum.VoiceApplication == nil {
+			return nil, fmt.Errorf("number %s does not have a voice application configured", to)
+		}
+		applicationSID = incomingNum.VoiceApplication
+	}
+	if applicationSID == nil {
+		return nil, fmt.Errorf("no application configured for account %s", accountSID)
+	}
 	// Get the application configuration
-	app := state.applications[*incomingNum.VoiceApplication]
+	app := state.applications[*applicationSID]
 	if app == nil {
-		return nil, fmt.Errorf("application %s not found for account %s", *incomingNum.VoiceApplication, accountSID)
+		return nil, fmt.Errorf("application %s not found for account %s", *applicationSID, accountSID)
 	}
 
 	// Validate application has VoiceURL configured
@@ -496,10 +542,19 @@ func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to st
 		Timeline:             []model.Event{},
 		Variables:            make(map[string]string),
 		Url:                  app.VoiceURL,
+		InitialParams:        params,
 		Method:               app.VoiceMethod,
 		StatusCallback:       app.StatusCallback,
 		StatusCallbackEvents: []model.CallStatus{model.CallCompleted}, // Twiml application only sends the completed event
+		CallbackQueue:        make(chan func(), 10),                    // Buffered to avoid blocking
 	}
+
+	// Start worker goroutine to process callbacks serially for this call
+	go func() {
+		for fn := range call.CallbackQueue {
+			fn() // Execute callback serially
+		}
+	}()
 
 	// Record event
 	e.addCallEventLocked(state, call, "call.created", map[string]any{
@@ -1005,6 +1060,63 @@ func (e *EngineImpl) CreateAddress(params *twilioopenapi.CreateAddressParams) (*
 		Validated:        &autoCorrectAddress,
 		DateCreated:      &dateCreated,
 		DateUpdated:      &dateUpdated,
+	}, nil
+}
+
+// CreateNewSigningKey creates a new API signing key for an account
+func (e *EngineImpl) CreateNewSigningKey(params *twilioopenapi.CreateNewSigningKeyParams) (*twilioopenapi.ApiV2010NewSigningKey, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+	friendlyName := ""
+	if params.FriendlyName != nil {
+		friendlyName = *params.FriendlyName
+	}
+
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	now := state.clock.Now()
+	sid := model.NewSigningKeySID()
+	secret := model.NewSigningKeySecret()
+
+	// Create the signing key
+	signingKey := &model.SigningKey{
+		SID:          sid,
+		FriendlyName: friendlyName,
+		Secret:       secret,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	state.signingKeys[sid] = signingKey
+	state.account.SigningKeys = append(state.account.SigningKeys, *signingKey)
+
+	// Convert to Twilio API response format
+	sidStr := sid
+	dateCreated := now.UTC().Format(time.RFC1123Z)
+	dateUpdated := now.UTC().Format(time.RFC1123Z)
+	secretStr := secret
+	friendlyNameStr := friendlyName
+
+	return &twilioopenapi.ApiV2010NewSigningKey{
+		Sid:          &sidStr,
+		FriendlyName: &friendlyNameStr,
+		DateCreated:  &dateCreated,
+		DateUpdated:  &dateUpdated,
+		Secret:       &secretStr,
 	}, nil
 }
 
@@ -1782,6 +1894,14 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 		addresses = append(addresses, *addr)
 	}
 	saCopy.Addresses = addresses
+
+	// Copy signing keys from state
+	signingKeys := make([]model.SigningKey, 0, len(state.signingKeys))
+	for _, key := range state.signingKeys {
+		signingKeys = append(signingKeys, *key)
+	}
+	saCopy.SigningKeys = signingKeys
+
 	snap.SubAccounts[accountSID] = &saCopy
 
 	return snap, nil
@@ -1964,8 +2084,10 @@ func (e *EngineImpl) updateCallStatusLocked(state *subAccountState, call *model.
 
 	// Trigger status callback if configured and user is interested in this event
 	if call.StatusCallback != "" && e.shouldSendStatusCallback(call, newStatus) {
-		// Note: this must stay asynchronous to avoid deadlocks
-		go e.sendCallStatusCallback(state, call)
+		// Queue the callback for serial execution
+		call.CallbackQueue <- func() {
+			e.sendCallStatusCallback(state, call)
+		}
 	} else {
 		// skipped status callback
 		call.Timeline = append(call.Timeline, model.NewEvent(
@@ -1975,6 +2097,12 @@ func (e *EngineImpl) updateCallStatusLocked(state *subAccountState, call *model.
 				"from": oldStatus,
 				"to":   newStatus,
 			}))
+	}
+
+	// Close the callback queue when call reaches terminal status
+	// This allows the worker goroutine to exit cleanly
+	if newStatus.IsTerminal() {
+		close(call.CallbackQueue)
 	}
 }
 
@@ -2233,13 +2361,14 @@ func (e *EngineImpl) getOrCreateConferenceLocked(state *subAccountState, account
 
 	now := state.clock.Now()
 	conf := &model.Conference{
-		Name:         cnf.Name,
-		SID:          model.NewConferenceSID(),
-		AccountSID:   accountSID,
-		Participants: []model.SID{},
-		Status:       model.ConferenceCreated,
-		Timeline:     []model.Event{},
-		CreatedAt:    now,
+		Name:          cnf.Name,
+		SID:           model.NewConferenceSID(),
+		AccountSID:    accountSID,
+		Participants:  []model.SID{},
+		Status:        model.ConferenceCreated,
+		Timeline:      []model.Event{},
+		CreatedAt:     now,
+		CallbackQueue: make(chan func(), 10), // Buffered to avoid blocking
 	}
 
 	// Store StatusCallback configuration if provided
@@ -2249,6 +2378,13 @@ func (e *EngineImpl) getOrCreateConferenceLocked(state *subAccountState, account
 			conf.StatusCallbackEvents = strings.Fields(cnf.StatusCallbackEvent)
 		}
 	}
+
+	// Start worker goroutine to process callbacks serially for this conference
+	go func() {
+		for fn := range conf.CallbackQueue {
+			fn() // Execute callback serially
+		}
+	}()
 
 	conf.Timeline = append(conf.Timeline, model.NewEvent(
 		now,

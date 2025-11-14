@@ -100,6 +100,15 @@ func (c *Client) CreateAddress(params *twilioopenapi.CreateAddressParams) (*twil
 	return c.engine.CreateAddress(params)
 }
 
+// CreateNewSigningKey creates a new API signing key for an account
+func (c *Client) CreateNewSigningKey(params *twilioopenapi.CreateNewSigningKeyParams) (*twilioopenapi.ApiV2010NewSigningKey, error) {
+	if params == nil {
+		params = &twilioopenapi.CreateNewSigningKeyParams{}
+	}
+	params.PathAccountSid = &c.subaccountSID
+	return c.engine.CreateNewSigningKey(params)
+}
+
 // CreateCall creates a new call via the engine using Twilio's generated params
 func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error) {
 	if params == nil {
@@ -112,6 +121,11 @@ func (c *Client) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopen
 // CreateIncomingCall simulates an incoming call to a provisioned number with an application
 func (c *Client) CreateIncomingCall(from string, to string) (*twilioopenapi.ApiV2010Call, error) {
 	return c.engine.CreateIncomingCall(model.SID(c.subaccountSID), from, to)
+}
+
+// CreateOutgoingSoftphoneCall simulates an outgoing call using twilio softphones
+func (c *Client) CreateOutgoingSoftphoneCall(from string, to string, accessToken string, params map[string]string) (*twilioopenapi.ApiV2010Call, error) {
+	return c.engine.CreateIncomingCallWithParams(model.SID(c.subaccountSID), from, to, accessToken, params)
 }
 
 // UpdateCall proxies call updates to the engine

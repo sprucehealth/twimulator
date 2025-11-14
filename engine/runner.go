@@ -131,7 +131,11 @@ func (r *CallRunner) answer(ctx context.Context) {
 		r.state.mu.Unlock()
 
 		// Fetch TwiML
-		twimlResp, err := r.fetchTwiML(ctx, currentMethod, currentURL, url.Values{})
+		values := url.Values{}
+		for k, v := range r.call.InitialParams {
+			values.Set(k, v)
+		}
+		twimlResp, err := r.fetchTwiML(ctx, currentMethod, currentURL, values)
 		if err != nil {
 			log.Printf("Failed to fetch Url for call %s: %v", r.call.SID, err)
 			r.recordError(err)
@@ -240,7 +244,7 @@ func (r *CallRunner) fetchTwiML(ctx context.Context, method, targetURL string, f
 	return resp, nil
 }
 
-func (r *CallRunner) executeTwiML(ctx context.Context, resp *twiml.Response, currentTwimlDocumentURL string, skipRedirect bool) error {
+func (r *CallRunner) executeTwiML(ctx context.Context, resp *twiml.Response, currentTwimlDocumentURL string, executingWaitTwiml bool) error {
 	terminated := false
 	for _, node := range resp.Children {
 		if terminated {
@@ -253,19 +257,19 @@ func (r *CallRunner) executeTwiML(ctx context.Context, resp *twiml.Response, cur
 			return nil
 		default:
 		}
-		if err := r.executeNode(ctx, node, currentTwimlDocumentURL, &terminated, skipRedirect); err != nil {
+		if err := r.executeNode(ctx, node, currentTwimlDocumentURL, &terminated, executingWaitTwiml); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTwimlDocumentURL string, terminated *bool, skipRedirect bool) error {
+func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTwimlDocumentURL string, terminated *bool, executingWaitTwiml bool) error {
 	switch n := node.(type) {
 	case *twiml.Say:
-		return r.executeSay(n, false)
+		return r.executeSay(ctx, n, false, executingWaitTwiml)
 	case *twiml.Play:
-		return r.executePlay(ctx, n, false)
+		return r.executePlay(ctx, n, false, executingWaitTwiml)
 	case *twiml.Pause:
 		return r.executePause(ctx, n, false)
 	case *twiml.Gather:
@@ -275,7 +279,7 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTw
 	case *twiml.Enqueue:
 		return r.executeEnqueue(ctx, n, currentTwimlDocumentURL)
 	case *twiml.Redirect:
-		return r.executeRedirect(ctx, n, currentTwimlDocumentURL, skipRedirect)
+		return r.executeRedirect(ctx, n, currentTwimlDocumentURL, executingWaitTwiml)
 	case *twiml.Record:
 		return r.executeRecord(ctx, n, currentTwimlDocumentURL, terminated)
 	case *twiml.Hangup:
@@ -290,7 +294,7 @@ func (r *CallRunner) executeNode(ctx context.Context, node twiml.Node, currentTw
 	return nil
 }
 
-func (r *CallRunner) executeSay(say *twiml.Say, skipTracking bool) error {
+func (r *CallRunner) executeSay(ctx context.Context, say *twiml.Say, skipTracking bool, executingWaitTwiml bool) error {
 	if !skipTracking {
 		r.trackCallTwiML(say)
 	}
@@ -299,10 +303,13 @@ func (r *CallRunner) executeSay(say *twiml.Say, skipTracking bool) error {
 		"voice":    say.Voice,
 		"language": say.Language,
 	})
+	if say.Loop == 0 && !executingWaitTwiml {
+		return r.busyLoop(ctx, "say")
+	}
 	return nil
 }
 
-func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play, skipTracking bool) error {
+func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play, skipTracking bool, executingWaitTwiml bool) error {
 	// Trim whitespace and newlines from URL
 	playURL := strings.TrimSpace(play.URL)
 	play.URL = playURL
@@ -345,8 +352,26 @@ func (r *CallRunner) executePlay(ctx context.Context, play *twiml.Play, skipTrac
 		"url":    playURL,
 		"status": status,
 	})
-
+	if play.Loop == 0 && !executingWaitTwiml {
+		return r.busyLoop(ctx, "play")
+	}
 	return nil
+}
+
+func (r *CallRunner) busyLoop(ctx context.Context, verbName string) error {
+	//return nil
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.hangupCh:
+			return nil
+		case <-r.urlUpdateCh:
+			// URL updated, skip through gather
+			r.addCallEvent(fmt.Sprintf("%s.interrupted", verbName), map[string]any{"reason": "url_updated"})
+			return ErrURLUpdated
+		}
+	}
 }
 
 func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause, skipTracking bool) error {
@@ -356,6 +381,27 @@ func (r *CallRunner) executePause(ctx context.Context, pause *twiml.Pause, skipT
 	r.addCallEvent("twiml.pause", map[string]any{
 		"length": pause.Length.Seconds(),
 	})
+
+	//pauseNow := func() error {
+	//	// Use the clock-aware After which respects Advance() calls
+	//	timer := r.clock.After(pause.Length)
+	//
+	//	// Wait for either the timer to expire, or an interrupt
+	//	select {
+	//	case <-ctx.Done():
+	//		return ctx.Err()
+	//	case <-r.hangupCh:
+	//		return nil
+	//	case <-r.urlUpdateCh:
+	//		r.addCallEvent("pause.interrupted", map[string]any{"reason": "url_updated"})
+	//		return ErrURLUpdated
+	//	case <-timer:
+	//		// Pause completed normally
+	//		return nil
+	//	}
+	//}
+	////for now we don't perform real pause to keep things predictable
+	//return pauseNow()
 	return nil
 }
 
@@ -392,11 +438,11 @@ func (r *CallRunner) executeGather(ctx context.Context, gather *twiml.Gather, cu
 		}
 		switch n := child.(type) {
 		case *twiml.Say:
-			if err := r.executeSay(n, true); err != nil {
+			if err := r.executeSay(ctx, n, true, false); err != nil {
 				return err
 			}
 		case *twiml.Play:
-			if err := r.executePlay(ctx, n, true); err != nil {
+			if err := r.executePlay(ctx, n, true, false); err != nil {
 				return err
 			}
 		case *twiml.Pause:
@@ -1003,7 +1049,11 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 	if conf.StatusCallback != "" {
 		// Send participant-join callback
 		if r.engine.shouldSendConferenceStatusCallback(conf, "participant-join") {
-			go r.engine.sendConferenceStatusCallback(r.state, conf, "participant-join", &r.call.SID, currentTwimlDocumentURL)
+			// Queue the callback for serial execution
+			callSID := r.call.SID
+			conf.CallbackQueue <- func() {
+				r.engine.sendConferenceStatusCallback(r.state, conf, "participant-join", &callSID, currentTwimlDocumentURL)
+			}
 		} else {
 			conf.Timeline = append(conf.Timeline, model.NewEvent(
 				r.clock.Now(),
@@ -1018,7 +1068,10 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 		// Send conference-start callback if conference just started
 		if shouldStart {
 			if r.engine.shouldSendConferenceStatusCallback(conf, "conference-start") {
-				go r.engine.sendConferenceStatusCallback(r.state, conf, "conference-start", nil, currentTwimlDocumentURL)
+				// Queue the callback for serial execution
+				conf.CallbackQueue <- func() {
+					r.engine.sendConferenceStatusCallback(r.state, conf, "conference-start", nil, currentTwimlDocumentURL)
+				}
 			} else {
 				conf.Timeline = append(conf.Timeline, model.NewEvent(
 					r.clock.Now(),
@@ -1473,11 +1526,15 @@ func (r *CallRunner) executeWait(ctx context.Context, eventPrefix, waitURL, wait
 	if waitTwiML != nil {
 		// skip redirect for wait twiml otherwise we will keep looping on audio files
 		if err := r.executeTwiML(ctx, waitTwiML, waitTwiMLDocumentURL, true); err != nil {
-			r.addCallEvent(eventPrefix+".wait_twiml_error", map[string]any{
-				"error": err.Error(),
-			})
-			// Log error but don't fail theeventPrefix+
-			r.recordError(err)
+			if errors.Is(err, ErrURLUpdated) {
+				return err
+			} else {
+				r.addCallEvent(eventPrefix+".wait_twiml_error", map[string]any{
+					"error": err.Error(),
+				})
+				// Log error but don't fail theeventPrefix+
+				r.recordError(err)
+			}
 		}
 	} else if waitAudioURL != "" {
 		// Audio URL was validated above, just log that it would be played
@@ -1759,7 +1816,11 @@ func (r *CallRunner) removeFromConference(conf *model.Conference, currentTwimlDo
 			// Send participant-leave callback if configured
 			if conf.StatusCallback != "" {
 				if r.engine.shouldSendConferenceStatusCallback(conf, "participant-leave") {
-					go r.engine.sendConferenceStatusCallback(r.state, conf, "participant-leave", &r.call.SID, currentTwimlDocumentURL)
+					// Queue the callback for serial execution
+					callSID := r.call.SID
+					conf.CallbackQueue <- func() {
+						r.engine.sendConferenceStatusCallback(r.state, conf, "participant-leave", &callSID, currentTwimlDocumentURL)
+					}
 				} else {
 					conf.Timeline = append(conf.Timeline, model.NewEvent(
 						r.clock.Now(),
@@ -1797,7 +1858,10 @@ func (r *CallRunner) removeFromConference(conf *model.Conference, currentTwimlDo
 	// Send conference-end callback if conference ended
 	if conferenceEnded && conf.StatusCallback != "" {
 		if r.engine.shouldSendConferenceStatusCallback(conf, "conference-end") {
-			go r.engine.sendConferenceStatusCallback(r.state, conf, "conference-end", nil, currentTwimlDocumentURL)
+			// Queue the callback for serial execution
+			conf.CallbackQueue <- func() {
+				r.engine.sendConferenceStatusCallback(r.state, conf, "conference-end", nil, currentTwimlDocumentURL)
+			}
 		} else {
 			conf.Timeline = append(conf.Timeline, model.NewEvent(
 				r.clock.Now(),
@@ -1807,6 +1871,11 @@ func (r *CallRunner) removeFromConference(conf *model.Conference, currentTwimlDo
 				},
 			))
 		}
+	}
+	if conferenceEnded {
+		// Close the callback queue after the conference ends
+		// This allows the worker goroutine to exit cleanly
+		close(conf.CallbackQueue)
 	}
 
 	r.call.CurrentEndpoint = ""

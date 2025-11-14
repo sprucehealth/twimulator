@@ -83,6 +83,11 @@ type Call struct {
 	Method               string            `json:"method"`
 	StatusCallback       string            `json:"status_callback,omitempty"`
 	StatusCallbackEvents []CallStatus      `json:"status_callback_events,omitempty"` // Events to trigger callbacks for
+	InitialParams        map[string]string `json:"initial_params,omitempty"`
+
+	// CallbackQueue serializes status callbacks for this call
+	// This is not serialized to JSON as it's internal state
+	CallbackQueue chan func() `json:"-"`
 }
 
 // Queue represents a call queue
@@ -106,6 +111,10 @@ type Conference struct {
 	EndedAt              *time.Time       `json:"ended_at,omitempty"`
 	StatusCallback       string           `json:"status_callback,omitempty"`
 	StatusCallbackEvents []string         `json:"status_callback_events,omitempty"` // "start", "end", "join", "leave"
+
+	// CallbackQueue serializes status callbacks for this conference
+	// This is not serialized to JSON as it's internal state
+	CallbackQueue chan func() `json:"-"`
 }
 
 // ParticipantState represents the state of a call within a specific conference
@@ -137,6 +146,7 @@ type SubAccount struct {
 	IncomingNumbers []IncomingNumber `json:"incoming_numbers"`
 	Applications    []Application    `json:"applications"`
 	Addresses       []Address        `json:"addresses"`
+	SigningKeys     []SigningKey     `json:"signing_keys"`
 }
 
 // IncomingNumber represents a provisioned phone number
@@ -177,6 +187,15 @@ type Address struct {
 	UpdatedAt        time.Time `json:"date_updated"`
 }
 
+// SigningKey represents a Twilio API signing key
+type SigningKey struct {
+	SID          string    `json:"sid"`
+	FriendlyName string    `json:"friendly_name,omitempty"`
+	Secret       string    `json:"secret"`
+	CreatedAt    time.Time `json:"date_created"`
+	UpdatedAt    time.Time `json:"date_updated"`
+}
+
 // SID generators with atomic counters for determinism
 var (
 	callCounter        uint64
@@ -187,6 +206,7 @@ var (
 	applicationCounter uint64
 	recordingCounter   uint64
 	addressCounter     uint64
+	signingKeyCounter  uint64
 )
 
 // NewCallSID generates a new Call SID (CAFAKE prefix, 34 chars total)
@@ -253,6 +273,21 @@ func NewAddressSID() SID {
 	b := make([]byte, 7)
 	rand.Read(b)
 	return SID(fmt.Sprintf("ADFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
+}
+
+// NewSigningKeySID generates a new Signing Key SID (SKFAKE prefix, 34 chars total)
+func NewSigningKeySID() string {
+	counter := atomic.AddUint64(&signingKeyCounter, 1)
+	b := make([]byte, 7)
+	rand.Read(b)
+	return fmt.Sprintf("SKFAKE%014x%s", counter, hex.EncodeToString(b)[:14])
+}
+
+// NewSigningKeySecret generates a pseudo-random secret for signing keys
+func NewSigningKeySecret() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // NewAuthToken generates a pseudo-random auth token for subaccounts
