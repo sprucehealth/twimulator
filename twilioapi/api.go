@@ -236,3 +236,24 @@ func (c *Client) AdvanceClock(d time.Duration) error {
 func (c *Client) SendDigits(callSID model.SID, digits string) error {
 	return c.engine.SendDigits(model.SID(c.subaccountSID), callSID, digits)
 }
+
+// SetCallRecording associates a recording file with a call for Dial/Conference recording callbacks
+// filePath: path to the recording file (can be one of the example recordings)
+// duration: duration of the recording in seconds
+// Returns the recording SID
+func (c *Client) SetCallRecording(callSID model.SID, filePath string, duration int) (model.SID, error) {
+	return c.engine.SetCallRecording(model.SID(c.subaccountSID), callSID, filePath, duration)
+}
+
+// SetCallVoicemail associates a voicemail recording with a call for Record verb
+// filePath: path to the recording file (can be one of the example recordings)
+// duration: duration of the recording in seconds
+// Returns the recording SID
+func (c *Client) SetCallVoicemail(callSID model.SID, filePath string, duration int) (model.SID, error) {
+	return c.engine.SetCallVoicemail(model.SID(c.subaccountSID), callSID, filePath, duration)
+}
+
+// GetRecording retrieves a recording by SID
+func (c *Client) GetRecording(recordingSID model.SID) (*model.Recording, error) {
+	return c.engine.GetRecording(model.SID(c.subaccountSID), recordingSID)
+}

@@ -135,6 +135,8 @@ func (r *CallRunner) answer(ctx context.Context) {
 		for k, v := range r.call.InitialParams {
 			values.Set(k, v)
 		}
+		// clear initial params
+		r.call.InitialParams = nil
 		twimlResp, err := r.fetchTwiML(ctx, currentMethod, currentURL, values)
 		if err != nil {
 			log.Printf("Failed to fetch Url for call %s: %v", r.call.SID, err)
@@ -754,6 +756,9 @@ bridgeEnded:
 		"target_queue_time": targetQueueTime,
 	})
 
+	// If recording was enabled and a recording was set on the enqueued call then invoke RecordingStatusCallback
+	r.invokeRecordingCallback(ctx, dial, nil, targetCallSID, currentTwimlDocumentURL)
+
 	// Call action callback with bridge results
 	form := url.Values{}
 	form.Set("DialCallStatus", "completed")
@@ -764,7 +769,9 @@ bridgeEnded:
 
 	// If URL was updated, skip TwiML execution
 	if urlUpdated {
-		_ = r.executeActionCallback(ctx, dial.Method, dial.Action, form, currentTwimlDocumentURL, true)
+		if err := r.executeActionCallback(ctx, dial.Method, dial.Action, form, currentTwimlDocumentURL, true); err != nil {
+			r.recordError(err)
+		}
 		return ErrURLUpdated
 	}
 
@@ -979,6 +986,10 @@ queueLeft:
 			"dial_duration": dialDuration,
 		})
 	}
+
+	// If recording was enabled and a recording was set on the enqueued call then invoke RecordingStatusCallback
+	r.invokeRecordingCallback(ctx, dial, nil, bridgePartnerSID, currentTwimlDocumentURL)
+
 	// Call action callback with dial results
 	form := url.Values{}
 	form.Set("DialCallStatus", dialStatus)
@@ -989,7 +1000,9 @@ queueLeft:
 
 	// If URL was updated, skip action callback entirely
 	if urlUpdated {
-		_ = r.executeActionCallback(ctx, dial.Method, dial.Action, form, currentTwimlDocumentURL, true)
+		if err := r.executeActionCallback(ctx, dial.Method, dial.Action, form, currentTwimlDocumentURL, true); err != nil {
+			r.recordError(err)
+		}
 		return ErrURLUpdated
 	}
 
@@ -1138,6 +1151,10 @@ conferenceEnded:
 	r.state.mu.Lock()
 	r.removeFromConference(conf, currentTwimlDocumentURL)
 	r.state.mu.Unlock()
+
+	// If recording was enabled and a recording was set, invoke RecordingStatusCallback
+	r.invokeRecordingCallback(ctx, dial, conference, r.call.SID, currentTwimlDocumentURL)
+
 	// Call action callback
 	r.state.mu.RLock()
 	form := url.Values{}
@@ -1148,7 +1165,9 @@ conferenceEnded:
 	form.Set("ConferenceStatus", string(conf.Status))
 	r.state.mu.RUnlock()
 	if urlUpdated {
-		_ = r.executeActionCallback(ctx, dial.Method, dial.Action, form, currentTwimlDocumentURL, true)
+		if err := r.executeActionCallback(ctx, dial.Method, dial.Action, form, currentTwimlDocumentURL, true); err != nil {
+			r.recordError(err)
+		}
 		return ErrURLUpdated
 	}
 	return r.executeActionCallback(ctx, dial.Method, dial.Action, form, currentTwimlDocumentURL, false)
@@ -1296,7 +1315,9 @@ func (r *CallRunner) bridgeEnqueueWithAgent(ctx context.Context, enqueue *twiml.
 
 	// If URL was updated, skip TwiML execution
 	if urlUpdated {
-		_ = r.executeActionCallback(ctx, enqueue.Method, enqueue.Action, form, currentTwimlDocumentURL, true)
+		if err := r.executeActionCallback(ctx, enqueue.Method, enqueue.Action, form, currentTwimlDocumentURL, true); err != nil {
+			r.recordError(err)
+		}
 		return ErrURLUpdated
 	}
 
@@ -1422,7 +1443,9 @@ func (r *CallRunner) waitInEnqueue(ctx context.Context, enqueue *twiml.Enqueue, 
 
 	// If URL was updated, skip action callback entirely
 	if urlUpdated {
-		_ = r.executeActionCallback(ctx, enqueue.Method, enqueue.Action, form, currentTwimlDocumentURL, true)
+		if err := r.executeActionCallback(ctx, enqueue.Method, enqueue.Action, form, currentTwimlDocumentURL, true); err != nil {
+			r.recordError(err)
+		}
 		return ErrURLUpdated
 	}
 
@@ -1580,7 +1603,6 @@ func (r *CallRunner) executeRedirect(ctx context.Context, redirect *twiml.Redire
 
 func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, currentTwimlDocumentURL string, terminated *bool) error {
 	r.trackCallTwiML(record)
-	startTime := r.clock.Now()
 
 	r.addCallEvent("twiml.record", map[string]any{
 		"max_length": record.MaxLength.Seconds(),
@@ -1601,42 +1623,54 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, cu
 
 	// Wait for timeout, maxLength, or hangup
 	// In a real implementation, this would wait for silence detection or user hangup
-	var recordingDuration time.Duration
 	var recordingStatus string
 
 	select {
 	case <-ctx.Done():
 		recordingStatus = "canceled"
-		recordingDuration = r.clock.Now().Sub(startTime)
 	case <-r.hangupCh:
 		recordingStatus = "completed"
-		recordingDuration = r.clock.Now().Sub(startTime)
 	case <-r.clock.After(record.MaxLength):
 		// Max length reached
 		recordingStatus = "completed"
-		recordingDuration = record.MaxLength
 		r.addCallEvent("record.max_length", map[string]any{})
 	}
 
 	r.state.mu.Lock()
 	r.call.CurrentEndpoint = ""
-	r.state.mu.Unlock()
 
-	// Generate a fake recording SID
-	recordingSID := model.NewRecordingSID()
+	// Check if a voicemail recording was set for this call
+	var recordingSID model.SID
+	var recordingDuration int
+	if voicemailSID, exists := r.state.callVoicemails[r.call.SID]; exists {
+		recordingSID = voicemailSID
+		if recording, exists := r.state.recordings[recordingSID]; exists {
+			recording.Status = recordingStatus
+			recordingDuration = recording.Duration
+		}
+	} else {
+		// Generate a fake recording SID if no voicemail was set
+		recordingSID = model.NewRecordingSID()
+	}
+	r.state.mu.Unlock()
 
 	r.addCallEvent("record.completed", map[string]any{
 		"recording_sid":      recordingSID,
-		"recording_duration": recordingDuration.Seconds(),
+		"recording_duration": recordingDuration,
 		"recording_status":   recordingStatus,
 	})
 
 	// Call action callback with recording results
 	form := url.Values{}
 	form.Set("RecordingSid", string(recordingSID))
-	form.Set("RecordingUrl", fmt.Sprintf("https://api.twilio.com/2010-04-01/Accounts/%s/Recordings/%s", r.call.AccountSID, recordingSID))
+	// Use baseURL if set, otherwise use the default Twilio URL
+	recordingURL := fmt.Sprintf("https://api.twilio.com/2010-04-01/Accounts/%s/Recordings/%s", r.call.AccountSID, recordingSID)
+	if r.engine.baseURL != "" {
+		recordingURL = fmt.Sprintf("%s/Accounts/%s/Recordings/%s", r.engine.baseURL, r.call.AccountSID, recordingSID)
+	}
+	form.Set("RecordingUrl", recordingURL)
 	form.Set("RecordingStatus", recordingStatus)
-	form.Set("RecordingDuration", fmt.Sprintf("%.0f", recordingDuration.Seconds()))
+	form.Set("RecordingDuration", fmt.Sprintf("%d", recordingDuration))
 
 	if err := r.executeActionCallback(ctx, record.Method, record.Action, form, currentTwimlDocumentURL, false); err != nil {
 		return err
@@ -1687,6 +1721,9 @@ func (r *CallRunner) updateStatus(status model.CallStatus) {
 }
 
 func (r *CallRunner) recordError(err error) {
+	if errors.Is(err, ErrCallHungup) || errors.Is(err, ErrURLUpdated) {
+		return
+	}
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
 	r.state.errors = append(r.state.errors, err)
@@ -1879,4 +1916,81 @@ func (r *CallRunner) removeFromConference(conf *model.Conference, currentTwimlDo
 	}
 
 	r.call.CurrentEndpoint = ""
+}
+
+// invokeRecordingCallback invokes the RecordingStatusCallback if recording is enabled and a recording was set
+func (r *CallRunner) invokeRecordingCallback(ctx context.Context, dial *twiml.Dial, conference *twiml.Conference, recordedCallSID model.SID, currentTwimlDocumentURL string) {
+	// Check if recording is enabled
+	recordEnabled := false
+	if conference != nil && conference.Record != "" && conference.Record != "do-not-record" {
+		recordEnabled = true
+	}
+	if dial.Record != "" && dial.Record != "do-not-record" {
+		recordEnabled = true
+	}
+
+	if !recordEnabled {
+		r.addCallEvent("recording.status_callback_skipped", map[string]any{
+			"reason": "recording_not_enabled",
+		})
+		return
+	}
+
+	// Check if a recording was set for this call
+	r.state.mu.RLock()
+	recordingSID, hasRecording := r.state.callRecordings[recordedCallSID]
+	var recording *model.Recording
+	if hasRecording {
+		recording = r.state.recordings[recordingSID]
+	}
+	r.state.mu.RUnlock()
+
+	if !hasRecording || recording == nil {
+		r.addCallEvent("recording.status_callback_skipped", map[string]any{
+			"reason": "recording_not_set",
+		})
+		return
+	}
+
+	// Use RecordingStatusCallback from Conference or Dial (Conference takes precedence)
+	recordingCallback := ""
+	if conference != nil && conference.RecordingStatusCallback != "" {
+		recordingCallback = conference.RecordingStatusCallback
+	}
+	if recordingCallback == "" && dial.RecordingStatusCallback != "" {
+		recordingCallback = dial.RecordingStatusCallback
+	}
+
+	if recordingCallback == "" {
+		r.addCallEvent("recording.status_callback_skipped", map[string]any{
+			"reason": "recording_status_callback_not_set",
+		})
+		return
+	}
+
+	// Invoke RecordingStatusCallback
+	recordingForm := url.Values{}
+	recordingForm.Set("RecordingSid", string(recordingSID))
+	// Use baseURL if set, otherwise use the default Twilio URL
+	recordingURL := fmt.Sprintf("https://api.twilio.com/2010-04-01/Accounts/%s/Recordings/%s", r.call.AccountSID, recordingSID)
+	if r.engine.baseURL != "" {
+		recordingURL = fmt.Sprintf("%s/Accounts/%s/Recordings/%s", r.engine.baseURL, r.call.AccountSID, recordingSID)
+	}
+	recordingForm.Set("RecordingUrl", recordingURL)
+	recordingForm.Set("RecordingStatus", recording.Status)
+	recordingForm.Set("RecordingDuration", fmt.Sprintf("%d", recording.Duration))
+	recordingForm.Set("CallSid", recording.CallSID.String())
+	recordingForm.Set("AccountSid", string(r.call.AccountSID))
+
+	r.addCallEvent("recording.status_callback", map[string]any{
+		"recording_sid": recordingSID,
+		"callback_url":  recordingCallback,
+	})
+
+	if err := r.executeActionCallback(ctx, "POST", recordingCallback, recordingForm, currentTwimlDocumentURL, true); err != nil {
+		r.addCallEvent("recording.status_callback_error", map[string]any{
+			"error": err,
+		})
+		r.recordError(err)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -122,6 +123,7 @@ func NewConsoleServer(e engine.Engine, addr string) (*ConsoleServer, error) {
 	mux.HandleFunc("/numbers/", cs.handleNumberDetail)
 	mux.HandleFunc("/addresses/", cs.handleAddressDetail)
 	mux.HandleFunc("/api/snapshot", cs.handleSnapshot)
+	mux.HandleFunc("/Accounts/", cs.handleRecording)
 	mux.Handle("/static/", http.FileServer(http.FS(content)))
 
 	cs.server = &http.Server{
@@ -394,6 +396,16 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 		conferences = append(conferences, conf)
 	}
 
+	// Get recordings for this account from the snapshot
+	recordings := make([]*model.Recording, 0, len(snap.Recordings))
+	for _, recording := range snap.Recordings {
+		recordings = append(recordings, recording)
+	}
+	// Sort recordings by created time (most recent first)
+	sort.SliceStable(recordings, func(i, j int) bool {
+		return recordings[i].CreatedAt.After(recordings[j].CreatedAt)
+	})
+
 	data := map[string]any{
 		"SubAccount":   view,
 		"Applications": view.Applications,
@@ -403,6 +415,7 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 		"Calls":        calls,
 		"Queues":       queues,
 		"Conferences":  conferences,
+		"Recordings":   recordings,
 		"Timestamp":    snap.Timestamp,
 	}
 
@@ -421,8 +434,11 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 	snaps := cs.engine.SnapshotAll()
 	var call *model.Call
 	var conferenceInfo *model.Conference
+	var recordings []*model.Recording
+	callSID := model.SID(sid)
+
 	for _, snap := range snaps {
-		if c, exists := snap.Calls[model.SID(sid)]; exists {
+		if c, exists := snap.Calls[callSID]; exists {
 			call = c
 			// Check if call is in a conference
 			if strings.HasPrefix(c.CurrentEndpoint, "conference:") {
@@ -433,6 +449,13 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 						conferenceInfo = conf
 						break
 					}
+				}
+			}
+
+			// Get recordings associated with this call
+			for _, recording := range snap.Recordings {
+				if recording.CallSID != nil && *recording.CallSID == callSID {
+					recordings = append(recordings, recording)
 				}
 			}
 			break
@@ -446,6 +469,7 @@ func (cs *ConsoleServer) handleCallDetail(w http.ResponseWriter, r *http.Request
 	data := map[string]any{
 		"Call":       call,
 		"Conference": conferenceInfo,
+		"Recordings": recordings,
 	}
 
 	if err := cs.tmpl.ExecuteTemplate(w, "call.html", data); err != nil {
@@ -680,4 +704,36 @@ func (cs *ConsoleServer) handleAddressDetail(w http.ResponseWriter, r *http.Requ
 	if err := cs.tmpl.ExecuteTemplate(w, "address.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// handleRecording serves recording files
+// URL format: /Accounts/{AccountSID}/Recordings/{RecordingSID}
+func (cs *ConsoleServer) handleRecording(w http.ResponseWriter, r *http.Request) {
+	// Parse URL path: /Accounts/{AccountSID}/Recordings/{RecordingSID}
+	path := strings.TrimPrefix(r.URL.Path, "/Accounts/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) != 3 || parts[1] != "Recordings" {
+		http.Error(w, "Invalid recording URL format. Expected: /Accounts/{AccountSID}/Recordings/{RecordingSID}", http.StatusBadRequest)
+		return
+	}
+
+	accountSID := model.SID(parts[0])
+	recordingSid := parts[2]
+	// Remove any file extension from the recording sid (e.g. .wav, .mp3)
+	ext := filepath.Ext(recordingSid)
+	if ext != "" {
+		recordingSid = recordingSid[:len(recordingSid)-len(ext)]
+	}
+	recordingSID := model.SID(recordingSid)
+
+	// Get the recording from the engine
+	recording, err := cs.engine.GetRecording(accountSID, recordingSID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Serve the recording file
+	http.ServeFile(w, r, recording.FilePath)
 }

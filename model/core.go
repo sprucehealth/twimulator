@@ -196,6 +196,17 @@ type SigningKey struct {
 	UpdatedAt    time.Time `json:"date_updated"`
 }
 
+// Recording represents a call or voicemail recording
+type Recording struct {
+	SID        SID       `json:"sid"`
+	AccountSID SID       `json:"account_sid"`
+	CallSID    *SID      `json:"call_sid,omitempty"`    // nil for voicemail recordings
+	FilePath   string    `json:"file_path"`             // Path to the recording file
+	Duration   int       `json:"duration"`              // Duration in seconds
+	Status     string    `json:"status"`                // "completed", "absent", etc.
+	CreatedAt  time.Time `json:"date_created"`
+}
+
 // SID generators with atomic counters for determinism
 var (
 	callCounter        uint64

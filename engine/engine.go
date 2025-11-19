@@ -70,6 +70,11 @@ type Engine interface {
 	Advance(d time.Duration)
 	Clock() Clock
 
+	// Recording management
+	SetCallRecording(accountSID model.SID, callSID model.SID, filePath string, duration int) (model.SID, error)
+	SetCallVoicemail(accountSID model.SID, callSID model.SID, filePath string, duration int) (model.SID, error)
+	GetRecording(accountSID model.SID, recordingSID model.SID) (*model.Recording, error)
+
 	// Shutdown
 	Close() error
 }
@@ -90,6 +95,7 @@ type StateSnapshot struct {
 	Queues      map[string]*model.Queue         `json:"queues"`
 	Conferences map[string]*model.Conference    `json:"conferences"`
 	SubAccounts map[model.SID]*model.SubAccount `json:"sub_accounts"`
+	Recordings  map[model.SID]*model.Recording  `json:"recordings"`
 	Errors      []error                         `json:"errors"`
 	Timestamp   time.Time                       `json:"timestamp"`
 }
@@ -111,9 +117,14 @@ type subAccountState struct {
 	conferences     map[string]*model.Conference
 	runners         map[model.SID]*CallRunner
 	errors          []error
+	recordings      map[model.SID]*model.Recording // Recordings by SID
 
 	// Participant states scoped by (conferenceSID, callSID)
 	participantStates map[model.SID]map[model.SID]*model.ParticipantState
+
+	// Call-specific recording associations
+	callRecordings map[model.SID]model.SID // callSID -> recordingSID for Dial/Conference recordings
+	callVoicemails map[model.SID]model.SID // callSID -> recordingSID for Record voicemails
 }
 
 // EngineImpl is the concrete implementation of Engine
@@ -127,6 +138,7 @@ type EngineImpl struct {
 	defaultClock Clock
 	webhook      httpstub.WebhookClient
 	apiVersion   string
+	baseURL      string // Base URL for generating recording URLs (e.g., "http://localhost:8080")
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
@@ -187,6 +199,13 @@ func WithWebhookClient(client httpstub.WebhookClient) EngineOption {
 	}
 }
 
+// WithBaseURL sets the base URL for generating recording URLs
+func WithBaseURL(baseURL string) EngineOption {
+	return func(e *EngineImpl) {
+		e.baseURL = baseURL
+	}
+}
+
 // NewEngine creates a new engine instance
 func NewEngine(opts ...EngineOption) *EngineImpl {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -240,7 +259,10 @@ func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*
 		queues:            make(map[string]*model.Queue),
 		conferences:       make(map[string]*model.Conference),
 		runners:           make(map[model.SID]*CallRunner),
+		recordings:        make(map[model.SID]*model.Recording),
 		participantStates: make(map[model.SID]map[model.SID]*model.ParticipantState),
+		callRecordings:    make(map[model.SID]model.SID),
+		callVoicemails:    make(map[model.SID]model.SID),
 	}
 
 	// Only lock when adding to subaccounts map
@@ -546,7 +568,7 @@ func (e *EngineImpl) CreateIncomingCallWithParams(accountSID model.SID, from str
 		Method:               app.VoiceMethod,
 		StatusCallback:       app.StatusCallback,
 		StatusCallbackEvents: []model.CallStatus{model.CallCompleted}, // Twiml application only sends the completed event
-		CallbackQueue:        make(chan func(), 10),                    // Buffered to avoid blocking
+		CallbackQueue:        make(chan func(), 10),                   // Buffered to avoid blocking
 	}
 
 	// Start worker goroutine to process callbacks serially for this call
@@ -1729,15 +1751,54 @@ func (e *EngineImpl) UpdateParticipant(conferenceSid string, callSid string, par
 	}, nil
 }
 
-// FetchRecording returns a recording with status "absent" (recordings not implemented)
-func (e *EngineImpl) FetchRecording(sid string, _ *twilioopenapi.FetchRecordingParams) (*twilioopenapi.ApiV2010Recording, error) {
-	sidStr := sid
-	status := "absent"
+// FetchRecording returns a recording by SID
+func (e *EngineImpl) FetchRecording(sid string, params *twilioopenapi.FetchRecordingParams) (*twilioopenapi.ApiV2010Recording, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	accountSID := model.SID(*params.PathAccountSid)
+	recordingSID := model.SID(sid)
 
-	return &twilioopenapi.ApiV2010Recording{
-		Sid:    &sidStr,
-		Status: &status,
-	}, nil
+	// Get the recording
+	recording, err := e.GetRecording(accountSID, recordingSID)
+	if err != nil {
+		// Return "absent" status if recording not found (Twilio-like behavior)
+		sidStr := sid
+		status := "absent"
+		return &twilioopenapi.ApiV2010Recording{
+			Sid:    &sidStr,
+			Status: &status,
+		}, nil
+	}
+
+	// Build Twilio-style response
+	sidStr := sid
+	accountSIDStr := string(recording.AccountSID)
+	status := recording.Status
+	duration := fmt.Sprintf("%d", recording.Duration)
+	dateCreated := recording.CreatedAt.UTC().Format(time.RFC1123Z)
+
+	resp := &twilioopenapi.ApiV2010Recording{
+		Sid:         &sidStr,
+		AccountSid:  &accountSIDStr,
+		Status:      &status,
+		Duration:    &duration,
+		DateCreated: &dateCreated,
+	}
+
+	// Add CallSid if this recording is associated with a call
+	if recording.CallSID != nil {
+		callSIDStr := string(*recording.CallSID)
+		resp.CallSid = &callSIDStr
+	}
+
+	// Generate recording URL using baseURL if set
+	if e.baseURL != "" {
+		uri := fmt.Sprintf("%s/Accounts/%s/Recordings/%s", e.baseURL, recording.AccountSID, recordingSID)
+		resp.Uri = &uri
+	}
+
+	return resp, nil
 }
 
 // GetCallState exposes the internal call model for inspection (tests, console)
@@ -1845,6 +1906,7 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 		Queues:      make(map[string]*model.Queue),
 		Conferences: make(map[string]*model.Conference),
 		SubAccounts: make(map[model.SID]*model.SubAccount),
+		Recordings:  make(map[model.SID]*model.Recording),
 		Timestamp:   state.clock.Now(),
 	}
 
@@ -1873,6 +1935,12 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 		confCopy.Participants = append([]model.SID{}, conf.Participants...)
 		confCopy.Timeline = append([]model.Event{}, conf.Timeline...)
 		snap.Conferences[name] = &confCopy
+	}
+
+	// Only include recordings for this subaccount
+	for sid, recording := range state.recordings {
+		recordingCopy := *recording
+		snap.Recordings[sid] = &recordingCopy
 	}
 
 	// Copy errors state.errors
@@ -2425,4 +2493,103 @@ func (e *EngineImpl) getOrCreateConference(accountSID model.SID, cnf *twiml.Conf
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return e.getOrCreateConferenceLocked(state, accountSID, cnf)
+}
+
+// SetCallRecording creates a recording for a call (for Dial/Conference recording)
+// Returns the recording SID
+func (e *EngineImpl) SetCallRecording(accountSID model.SID, callSID model.SID, filePath string, duration int) (model.SID, error) {
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return "", notFoundError(accountSID)
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	// Verify call exists
+	if _, exists := state.calls[callSID]; !exists {
+		return "", notFoundError(callSID)
+	}
+
+	// Generate a new recording SID every time (even for the same file)
+	recordingSID := model.NewRecordingSID()
+	now := state.clock.Now()
+
+	recording := &model.Recording{
+		SID:        recordingSID,
+		AccountSID: accountSID,
+		CallSID:    &callSID,
+		FilePath:   filePath,
+		Duration:   duration,
+		Status:     "completed",
+		CreatedAt:  now,
+	}
+
+	state.recordings[recordingSID] = recording
+	state.callRecordings[callSID] = recordingSID
+
+	return recordingSID, nil
+}
+
+// SetCallVoicemail creates a voicemail recording for a call (for Record verb)
+// Returns the recording SID
+func (e *EngineImpl) SetCallVoicemail(accountSID model.SID, callSID model.SID, filePath string, duration int) (model.SID, error) {
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return "", notFoundError(accountSID)
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	// Verify call exists
+	if _, exists := state.calls[callSID]; !exists {
+		return "", notFoundError(callSID)
+	}
+
+	// Generate a new recording SID every time (even for the same file)
+	recordingSID := model.NewRecordingSID()
+	now := state.clock.Now()
+
+	recording := &model.Recording{
+		SID:        recordingSID,
+		AccountSID: accountSID,
+		CallSID:    &callSID,
+		FilePath:   filePath,
+		Duration:   duration,
+		Status:     "completed",
+		CreatedAt:  now,
+	}
+
+	state.recordings[recordingSID] = recording
+	state.callVoicemails[callSID] = recordingSID
+
+	return recordingSID, nil
+}
+
+// GetRecording retrieves a recording by SID
+func (e *EngineImpl) GetRecording(accountSID model.SID, recordingSID model.SID) (*model.Recording, error) {
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	recording, exists := state.recordings[recordingSID]
+	if !exists {
+		return nil, notFoundError(recordingSID)
+	}
+
+	return recording, nil
 }

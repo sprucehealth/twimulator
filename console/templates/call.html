@@ -103,6 +103,36 @@
             </table>
             {{end}}
 
+            {{if .Recordings}}
+            <h3>Recordings</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>SID</th>
+                        <th>Status</th>
+                        <th>Duration</th>
+                        <th>File Path</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Recordings}}
+                    <tr>
+                        <td><code>{{.SID}}</code></td>
+                        <td><span class="status status-{{.Status}}">{{.Status}}</span></td>
+                        <td>{{.Duration}}s</td>
+                        <td class="url-cell"><code>{{.FilePath}}</code></td>
+                        <td>{{.CreatedAt.Format "15:04:05"}}</td>
+                        <td>
+                            <a href="/Accounts/{{.AccountSID}}/Recordings/{{.SID}}" target="_blank">Download</a>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{end}}
+
             <h3>Timeline</h3>
             <div class="timeline">
                 {{range .Call.Timeline}}
