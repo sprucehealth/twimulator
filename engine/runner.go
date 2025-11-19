@@ -662,7 +662,7 @@ func (r *CallRunner) bridgeWithQueueMember(ctx context.Context, dial *twiml.Dial
 		default:
 		}
 	}
-
+	recordingStartTime := r.clock.Now()
 	// Bridge is established - wait until either call hangs up (no timeout during bridge)
 	var dialDuration int
 	urlUpdated := false
@@ -757,7 +757,7 @@ bridgeEnded:
 	})
 
 	// For queued calls, recording is always on the enqueued call
-	r.invokeRecordingCallback(ctx, dial, nil, targetCallSID, currentTwimlDocumentURL)
+	r.invokeRecordingCallback(ctx, dial, nil, recordingStartTime, targetCallSID, currentTwimlDocumentURL)
 
 	// Call action callback with bridge results
 	form := url.Values{}
@@ -985,10 +985,9 @@ queueLeft:
 			"queue":         queue.Name,
 			"dial_duration": dialDuration,
 		})
+		// For queued calls, recording is always on the enqueued call
+		r.invokeRecordingCallback(ctx, dial, nil, bridgeStartTime, bridgePartnerSID, currentTwimlDocumentURL)
 	}
-
-	// For queued calls, recording is always on the enqueued call
-	r.invokeRecordingCallback(ctx, dial, nil, bridgePartnerSID, currentTwimlDocumentURL)
 
 	// Call action callback with dial results
 	form := url.Values{}
@@ -1105,6 +1104,7 @@ func (r *CallRunner) executeDialConference(ctx context.Context, dial *twiml.Dial
 		"hangupOnStar": dial.HangupOnStar,
 	})
 
+	recordingStartTime := r.clock.Now()
 	// Wait until hangup or leave conference
 	urlUpdated := false
 	if dial.HangupOnStar {
@@ -1153,7 +1153,7 @@ conferenceEnded:
 	r.state.mu.Unlock()
 
 	// If recording was enabled and a recording was set, invoke RecordingStatusCallback
-	r.invokeRecordingCallback(ctx, dial, conference, r.call.SID, currentTwimlDocumentURL)
+	r.invokeRecordingCallback(ctx, dial, conference, recordingStartTime, r.call.SID, currentTwimlDocumentURL)
 
 	// Call action callback
 	r.state.mu.RLock()
@@ -1919,7 +1919,7 @@ func (r *CallRunner) removeFromConference(conf *model.Conference, currentTwimlDo
 }
 
 // invokeRecordingCallback invokes the RecordingStatusCallback if recording is enabled and a recording was set
-func (r *CallRunner) invokeRecordingCallback(ctx context.Context, dial *twiml.Dial, conference *twiml.Conference, recordedCallSID model.SID, currentTwimlDocumentURL string) {
+func (r *CallRunner) invokeRecordingCallback(ctx context.Context, dial *twiml.Dial, conference *twiml.Conference, recordingStartTime time.Time, recordedCallSID model.SID, currentTwimlDocumentURL string) {
 	// Check if recording is enabled
 	recordEnabled := false
 	if conference != nil && conference.Record != "" && conference.Record != "do-not-record" {
@@ -1985,6 +1985,7 @@ func (r *CallRunner) invokeRecordingCallback(ctx context.Context, dial *twiml.Di
 	recordingForm.Set("RecordingUrl", recordingURL)
 	recordingForm.Set("RecordingStatus", recording.Status)
 	recordingForm.Set("RecordingDuration", fmt.Sprintf("%d", recording.Duration))
+	recordingForm.Set("RecordingStartTime", recordingStartTime.Format("Mon, 02 Jan 2006 15:04:05 -0700"))
 	recordingForm.Set("CallSid", recording.CallSID.String())
 	recordingForm.Set("AccountSid", string(r.call.AccountSID))
 
