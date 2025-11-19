@@ -756,7 +756,7 @@ bridgeEnded:
 		"target_queue_time": targetQueueTime,
 	})
 
-	// If recording was enabled and a recording was set on the enqueued call then invoke RecordingStatusCallback
+	// For queued calls, recording is always on the enqueued call
 	r.invokeRecordingCallback(ctx, dial, nil, targetCallSID, currentTwimlDocumentURL)
 
 	// Call action callback with bridge results
@@ -987,7 +987,7 @@ queueLeft:
 		})
 	}
 
-	// If recording was enabled and a recording was set on the enqueued call then invoke RecordingStatusCallback
+	// For queued calls, recording is always on the enqueued call
 	r.invokeRecordingCallback(ctx, dial, nil, bridgePartnerSID, currentTwimlDocumentURL)
 
 	// Call action callback with dial results
@@ -1935,13 +1935,16 @@ func (r *CallRunner) invokeRecordingCallback(ctx context.Context, dial *twiml.Di
 		})
 		return
 	}
-
+	var cnf *model.Conference
 	// Check if a recording was set for this call
 	r.state.mu.RLock()
 	recordingSID, hasRecording := r.state.callRecordings[recordedCallSID]
 	var recording *model.Recording
 	if hasRecording {
 		recording = r.state.recordings[recordingSID]
+	}
+	if conference != nil {
+		cnf = r.state.conferences[conference.Name]
 	}
 	r.state.mu.RUnlock()
 
@@ -1971,6 +1974,9 @@ func (r *CallRunner) invokeRecordingCallback(ctx context.Context, dial *twiml.Di
 	// Invoke RecordingStatusCallback
 	recordingForm := url.Values{}
 	recordingForm.Set("RecordingSid", string(recordingSID))
+	if cnf != nil {
+		recordingForm.Set("ConferenceSid", string(cnf.SID))
+	}
 	// Use baseURL if set, otherwise use the default Twilio URL
 	recordingURL := fmt.Sprintf("https://api.twilio.com/2010-04-01/Accounts/%s/Recordings/%s", r.call.AccountSID, recordingSID)
 	if r.engine.baseURL != "" {
