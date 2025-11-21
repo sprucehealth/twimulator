@@ -355,9 +355,6 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 	if params.Url != nil {
 		url = *params.Url
 	}
-	if url == "" {
-		return nil, fmt.Errorf("Url is required")
-	}
 
 	method := http.MethodPost
 	if params.Method != nil {
@@ -1250,10 +1247,9 @@ func (e *EngineImpl) AnswerCall(subaccountSID, callSID model.SID) error {
 	})
 
 	if runner != nil {
-		select {
-		case runner.answerCh <- struct{}{}:
-		default:
-		}
+		runner.answerOnce.Do(func() {
+			close(runner.answerCh)
+		})
 	}
 
 	return nil

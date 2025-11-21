@@ -399,8 +399,17 @@ func parseRedirect(decoder *xml.Decoder, start *xml.StartElement) (*Redirect, er
 func parseNumber(decoder *xml.Decoder, start *xml.StartElement) (*Number, error) {
 	num := &Number{}
 	for _, attr := range start.Attr {
-		if attr.Value != "" {
-			return nil, fmt.Errorf("unknown attribute '%s' on <Number>", attr.Name.Local)
+		switch attr.Name.Local {
+		case "statusCallbackEvent":
+			num.StatusCallbackEvent = attr.Value
+		case "statusCallback":
+			num.StatusCallback = attr.Value
+		case "url":
+			num.URL = attr.Value
+		default:
+			if attr.Value != "" {
+				return nil, fmt.Errorf("unknown attribute '%s' on <Number>", attr.Name.Local)
+			}
 		}
 	}
 	if err := decoder.DecodeElement(&num.Number, start); err != nil {
@@ -425,14 +434,79 @@ func parseSip(decoder *xml.Decoder, start *xml.StartElement) (*Sip, error) {
 func parseClient(decoder *xml.Decoder, start *xml.StartElement) (*Client, error) {
 	client := &Client{}
 	for _, attr := range start.Attr {
-		if attr.Value != "" {
-			return nil, fmt.Errorf("unknown attribute '%s' on <Client>", attr.Name.Local)
+		switch attr.Name.Local {
+		case "url":
+			client.URL = attr.Value
+		default:
+			if attr.Value != "" {
+				return nil, fmt.Errorf("unknown attribute '%s' on <Client>", attr.Name.Local)
+			}
 		}
 	}
-	if err := decoder.DecodeElement(&client.Name, start); err != nil {
+
+	// Parse content which could be plain text (name/identity) or nested elements
+	var textContent string
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		switch t := token.(type) {
+		case xml.CharData:
+			textContent += strings.TrimSpace(string(t))
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "Parameter":
+				param, err := parseParameter(decoder, &t)
+				if err != nil {
+					return nil, err
+				}
+				client.Children = append(client.Children, param)
+			case "Identity":
+				if err := decoder.DecodeElement(&client.Name, &t); err != nil {
+					return nil, err
+				}
+			default:
+				return nil, fmt.Errorf("unknown element '<%s>' inside <Client>", t.Name.Local)
+			}
+		case xml.EndElement:
+			if t.Name.Local == "Client" {
+				if client.Name == "" {
+					client.Name = textContent
+				}
+				return client, nil
+			}
+		}
+	}
+
+	return client, nil
+}
+
+func parseParameter(decoder *xml.Decoder, start *xml.StartElement) (*Parameter, error) {
+	param := &Parameter{}
+	for _, attr := range start.Attr {
+		switch attr.Name.Local {
+		case "name":
+			param.Name = attr.Value
+		case "value":
+			param.Value = attr.Value
+		default:
+			if attr.Value != "" {
+				return nil, fmt.Errorf("unknown attribute '%s' on <Parameter>", attr.Name.Local)
+			}
+		}
+	}
+
+	// Consume the end tag
+	if err := decoder.Skip(); err != nil {
 		return nil, err
 	}
-	return client, nil
+
+	return param, nil
 }
 
 func parseQueueDial(decoder *xml.Decoder, start *xml.StartElement) (*Queue, error) {

@@ -75,6 +75,7 @@ type Call struct {
 	AnsweredAt           *time.Time        `json:"answered_at,omitempty"`
 	EndedAt              *time.Time        `json:"ended_at,omitempty"`
 	ParentCallSID        *SID              `json:"parent_call_sid,omitempty"`
+	ChildCallSIDs        []SID             `json:"child_call_sids,omitempty"`
 	CurrentEndpoint      string            `json:"current_endpoint"` // "queue:{name}", "conference:{name}", "gather", ""
 	Timeline             []Event           `json:"timeline"`
 	ExecutedTwiML        []any             `json:"executed_twiml,omitempty"` // Track executed TwiML verbs for testing
@@ -200,10 +201,10 @@ type SigningKey struct {
 type Recording struct {
 	SID        SID       `json:"sid"`
 	AccountSID SID       `json:"account_sid"`
-	CallSID    *SID      `json:"call_sid,omitempty"`    // nil for voicemail recordings
-	FilePath   string    `json:"file_path"`             // Path to the recording file
-	Duration   int       `json:"duration"`              // Duration in seconds
-	Status     string    `json:"status"`                // "completed", "absent", etc.
+	CallSID    *SID      `json:"call_sid,omitempty"` // nil for voicemail recordings
+	FilePath   string    `json:"file_path"`          // Path to the recording file
+	Duration   int       `json:"duration"`           // Duration in seconds
+	Status     string    `json:"status"`             // "completed", "absent", etc.
 	CreatedAt  time.Time `json:"date_created"`
 }
 

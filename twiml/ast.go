@@ -126,7 +126,10 @@ func (Record) isNode() {}
 
 // Number is used inside <Dial> to specify a phone number
 type Number struct {
-	Number string
+	Number              string
+	StatusCallbackEvent string
+	StatusCallback      string
+	URL                 string
 }
 
 func (Number) isNode() {}
@@ -140,10 +143,24 @@ func (Sip) isNode() {}
 
 // Client is used inside <Dial> to dial a Twilio Client
 type Client struct {
-	Name string
+	Name     string
+	URL      string
+	Children []Node // For nested <Parameter>
 }
 
 func (Client) isNode() {}
+
+func (c Client) ChildNodes() []Node {
+	return c.Children
+}
+
+// Parameter is used inside <Client> to pass custom key-value pairs
+type Parameter struct {
+	Name  string
+	Value string
+}
+
+func (Parameter) isNode() {}
 
 // Queue is used inside <Dial> to dial a queue member
 type Queue struct {

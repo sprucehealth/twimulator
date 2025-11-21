@@ -734,6 +734,7 @@ func TestUpdateCall(t *testing.T) {
 	}
 }
 
+// TODO: This test is known to fail because Pause is not a real pause
 func TestUpdateCallURLDuringExecution(t *testing.T) {
 	// Track which URLs were called
 	callCount := make(map[string]int)
@@ -1602,6 +1603,10 @@ func TestRecordMaxLength(t *testing.T) {
 	call := mustCreateCall(t, e, newCreateCallParams(subAccount.SID, "+1234", "+5678", "http://test/answer"))
 
 	time.Sleep(10 * time.Millisecond)
+	_, err := e.SetCallVoicemail(subAccount.SID, call.SID, "/dummy/recording.mp3", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := e.AnswerCall(subAccount.SID, call.SID); err != nil {
 		t.Fatal(err)
 	}

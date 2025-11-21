@@ -22,9 +22,9 @@ func TestDialHangupOnStar(t *testing.T) {
 		mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
 			if targetURL == "http://test/answer" {
 				return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Dial hangupOnStar="true">+15551234567</Dial>
-</Response>`), make(http.Header), nil
+	<Response>
+	 <Dial hangupOnStar="true">+15551234567</Dial>
+	</Response>`), make(http.Header), nil
 			}
 			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
 		}
@@ -58,6 +58,24 @@ func TestDialHangupOnStar(t *testing.T) {
 		if got.Status != model.CallInProgress {
 			t.Fatalf("Expected call in progress, got %s", got.Status)
 		}
+		if len(got.ChildCallSIDs) != 1 {
+			t.Fatal("Expected 1 child call sids, got ", len(got.ChildCallSIDs))
+		}
+
+		childCall, ok := e.GetCallState(subAccount.SID, got.ChildCallSIDs[0])
+		if !ok {
+			t.Fatal("Child call not found")
+		}
+		if childCall.Status != model.CallRinging {
+			t.Fatalf("Expected child call ringing, got %s", childCall.Status)
+		}
+		// answer child call
+		err = e.AnswerCall(subAccount.SID, childCall.SID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Advance(1 * time.Second)
+		time.Sleep(10 * time.Millisecond)
 
 		// Send star digit to trigger hangup
 		err = e.SendDigits(subAccount.SID, call.SID, "*")
@@ -100,9 +118,9 @@ func TestDialHangupOnStar(t *testing.T) {
 		mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
 			if targetURL == "http://test/answer" {
 				return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Dial hangupOnStar="false" timeout="5">+15551234567</Dial>
-</Response>`), make(http.Header), nil
+		<Response>
+		 <Dial hangupOnStar="false" timeout="5">+15551234567</Dial>
+		</Response>`), make(http.Header), nil
 			}
 			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
 		}
@@ -159,11 +177,11 @@ func TestDialHangupOnStar(t *testing.T) {
 		mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
 			if targetURL == "http://test/answer" {
 				return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Dial hangupOnStar="true"><Conference>test-room</Conference></Dial>
-  <Say>Left conference</Say>
-  <Hangup/>
-</Response>`), make(http.Header), nil
+		<Response>
+		 <Dial hangupOnStar="true"><Conference>test-room</Conference></Dial>
+		 <Say>Left conference</Say>
+		 <Hangup/>
+		</Response>`), make(http.Header), nil
 			}
 			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
 		}
@@ -225,9 +243,9 @@ func TestDialHangupOnStar(t *testing.T) {
 		mock.ResponseFunc = func(targetURL string, form url.Values) (int, []byte, http.Header, error) {
 			if targetURL == "http://test/answer" {
 				return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Dial hangupOnStar="true">+15551234567</Dial>
-</Response>`), make(http.Header), nil
+	<Response>
+	 <Dial hangupOnStar="true">+15551234567</Dial>
+	</Response>`), make(http.Header), nil
 			}
 			return 200, []byte(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`), make(http.Header), nil
 		}
@@ -247,6 +265,24 @@ func TestDialHangupOnStar(t *testing.T) {
 		// Answer the call
 		time.Sleep(10 * time.Millisecond)
 		err := e.AnswerCall(subAccount.SID, call.SID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Advance(1 * time.Second)
+		time.Sleep(10 * time.Millisecond)
+		if len(call.ChildCallSIDs) != 1 {
+			t.Fatal("Expected 1 child call sids, got ", len(call.ChildCallSIDs))
+		}
+
+		childCall, ok := e.GetCallState(subAccount.SID, call.ChildCallSIDs[0])
+		if !ok {
+			t.Fatal("Child call not found")
+		}
+		if childCall.Status != model.CallRinging {
+			t.Fatalf("Expected child call ringing, got %s", childCall.Status)
+		}
+		// answer child call
+		err = e.AnswerCall(subAccount.SID, childCall.SID)
 		if err != nil {
 			t.Fatal(err)
 		}
