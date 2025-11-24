@@ -77,6 +77,7 @@ type Dial struct {
 	Method                  string
 	Timeout                 time.Duration
 	HangupOnStar            bool
+	CallerId                string
 	Record                  string // "do-not-record", "record-from-answer", "record-from-ringing", "record-from-answer-dual", "record-from-ringing-dual"
 	RecordingStatusCallback string
 	Children                []Node // For nested <Number>, <Client>, <Queue>, <Conference>

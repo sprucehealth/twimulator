@@ -280,6 +280,8 @@ func parseDial(decoder *xml.Decoder, start *xml.StartElement) (*Dial, error) {
 			}
 		case "hangupOnStar":
 			dial.HangupOnStar = attr.Value == "true"
+		case "callerId":
+			dial.CallerId = attr.Value
 		case "record":
 			// Handle backward compatibility: true -> record-from-answer, false -> do-not-record
 			if attr.Value == "true" {

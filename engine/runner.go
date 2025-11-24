@@ -48,7 +48,9 @@ type CallRunner struct {
 	answerCh             chan struct{}
 	answerOnce           sync.Once // Ensures answerCh is closed only once
 	busyCh               chan struct{}
+	busyOnce             sync.Once // Ensures busyCh is closed only once
 	failedCh             chan struct{}
+	failedOnce           sync.Once          // Ensures failedCh is closed only once
 	dequeueCh            chan dequeueResult // for explicit dequeue with result and partner info
 	urlUpdateCh          chan string        // signals URL update with new URL
 	conferenceCompleteCh chan struct{}      // signals conference completion via API
@@ -67,8 +69,8 @@ func NewCallRunner(call *model.Call, state *subAccountState, engine *EngineImpl,
 		gatherCh:             make(chan string, 1),
 		hangupCh:             make(chan struct{}), // No buffer - will be closed to broadcast
 		answerCh:             make(chan struct{}), // No buffer - will be closed to broadcast
-		busyCh:               make(chan struct{}, 1),
-		failedCh:             make(chan struct{}, 1),
+		busyCh:               make(chan struct{}), // No buffer - will be closed to broadcast
+		failedCh:             make(chan struct{}), // No buffer - will be closed to broadcast
 		dequeueCh:            make(chan dequeueResult, 1),
 		urlUpdateCh:          make(chan string, 1),
 		conferenceCompleteCh: make(chan struct{}, 1),
@@ -310,9 +312,7 @@ func (r *CallRunner) executeSay(ctx context.Context, say *twiml.Say, skipTrackin
 		r.trackCallTwiML(say)
 	}
 	r.addCallEvent("twiml.say", map[string]any{
-		"text":     say.Text,
-		"voice":    say.Voice,
-		"language": say.Language,
+		"say": say,
 	})
 	if say.Loop == 0 && !executingWaitTwiml {
 		return r.busyLoop(ctx, "say")
@@ -593,11 +593,7 @@ func (r *CallRunner) executeDial(ctx context.Context, dial *twiml.Dial, currentT
 	}
 
 	r.addCallEvent("twiml.dial", map[string]any{
-		"number":     numbers,
-		"client":     clients,
-		"queue":      queueDial,
-		"conference": conferenceDial,
-		"timeout":    dial.Timeout.Seconds(),
+		"dial": dial,
 	})
 
 	// Handle different dial targets
@@ -1221,7 +1217,12 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 
 		params := &twilioopenapi.CreateCallParams{}
 		params.SetPathAccountSid(string(r.call.AccountSID))
-		params.SetFrom(r.call.From) // Parent's From becomes child's From
+		// Use callerId if specified, otherwise use parent's From
+		fromNumber := r.call.From
+		if dial.CallerId != "" {
+			fromNumber = dial.CallerId
+		}
+		params.SetFrom(fromNumber)
 		params.SetTo(to)
 		params.SetUrl(urlStr)
 
@@ -1233,12 +1234,13 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 			params.SetStatusCallbackEvent(events)
 		}
 
-		apiCall, err := r.engine.CreateCall(params)
+		apiCall, err := r.engine.createChildCall(params, &r.call.SID)
 		if err != nil {
 			r.addCallEvent("dial.create_call_failed", map[string]any{
 				"to":    to,
 				"error": err.Error(),
 			})
+			r.recordError(err)
 			return
 		}
 
@@ -1251,10 +1253,10 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 		r.state.mu.RUnlock()
 
 		if runner == nil || child == nil {
+			r.recordError(fmt.Errorf("child call %s not found", callSID))
 			return
 		}
 		r.state.mu.Lock()
-		child.ParentCallSID = &r.call.SID
 		r.state.calls[r.call.SID].ChildCallSIDs = append(r.state.calls[r.call.SID].ChildCallSIDs, callSID)
 		r.state.mu.Unlock()
 		// Track this child call
@@ -1301,11 +1303,6 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 		}, currentTwimlDocumentURL, false)
 	}
 
-	// Create a merged channel to wait for any child to answer
-	answerCases := make([]chan struct{}, len(childCalls))
-	for i, child := range childCalls {
-		answerCases[i] = child.answerCh
-	}
 	childCallsMu.Unlock()
 
 	// Wait for first answer, timeout, or parent hangup
@@ -1314,50 +1311,113 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 	var answeredCallSID model.SID
 	var answeredRunner *CallRunner
 
-	// Use reflection-free approach: launch goroutines to monitor each child's answerCh
-	firstAnswerCh := make(chan model.SID, 1)
+	// Track completion status of all children
+	type childStatus struct {
+		callSID model.SID
+		status  string // "answered", "busy", "failed", "no-answer"
+	}
+	childStatusCh := make(chan childStatus, len(childCalls))
+	completedChildren := make(map[model.SID]string) // callSID -> status
+	var completedMu sync.Mutex
+
+	// Launch goroutines to monitor each child's status channels
 	for _, child := range childCalls {
 		child := child // capture loop variable
 		go func() {
 			select {
 			case <-child.answerCh:
-				select {
-				case firstAnswerCh <- child.callSID:
-				default:
-				}
+				childStatusCh <- childStatus{callSID: child.callSID, status: "answered"}
+			case <-child.runner.busyCh:
+				childStatusCh <- childStatus{callSID: child.callSID, status: "busy"}
+			case <-child.runner.failedCh:
+				childStatusCh <- childStatus{callSID: child.callSID, status: "failed"}
 			case <-ctx.Done():
 			case <-r.hangupCh:
 			}
 		}()
 	}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-r.hangupCh:
-		r.addCallEvent("dial.parent_hangup", map[string]any{})
-		return nil
-	case <-timeoutTimer:
-		r.addCallEvent("dial.no_answer", map[string]any{
-			"reason": "timeout",
-		})
-		return r.executeActionCallback(ctx, dial.Method, dial.Action, url.Values{
-			"DialCallStatus": {"no-answer"},
-		}, currentTwimlDocumentURL, false)
-	case answeredCallSID = <-firstAnswerCh:
-		// One call answered!
-		childCallsMu.Lock()
-		for _, child := range childCalls {
-			if child.callSID == answeredCallSID {
-				answeredRunner = child.runner
-			} else {
-				// Hangup all other child calls
-				if child.runner != nil {
-					child.runner.Hangup()
+	// Wait for first answer or all children to complete
+	totalChildren := len(childCalls)
+
+waitLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.hangupCh:
+			r.addCallEvent("dial.parent_hangup", map[string]any{})
+			return nil
+		case <-timeoutTimer:
+			r.addCallEvent("dial.no_answer", map[string]any{
+				"reason": "timeout",
+			})
+			return r.executeActionCallback(ctx, dial.Method, dial.Action, url.Values{
+				"DialCallStatus": {"no-answer"},
+			}, currentTwimlDocumentURL, false)
+		case status := <-childStatusCh:
+			completedMu.Lock()
+			completedChildren[status.callSID] = status.status
+			numCompleted := len(completedChildren)
+			completedMu.Unlock()
+
+			if status.status == "answered" {
+				// One call answered! Break out and proceed with bridging
+				answeredCallSID = status.callSID
+				childCallsMu.Lock()
+				for _, child := range childCalls {
+					if child.callSID == answeredCallSID {
+						answeredRunner = child.runner
+					} else {
+						// Hangup all other child calls
+						if child.runner != nil {
+							child.runner.Hangup()
+						}
+					}
 				}
+				childCallsMu.Unlock()
+				break waitLoop
+			}
+
+			// Check if all children have completed without any answering
+			if numCompleted == totalChildren {
+				// All children completed, none answered
+				completedMu.Lock()
+				allBusy := true
+				anyFailed := false
+				for _, st := range completedChildren {
+					if st != "busy" {
+						allBusy = false
+					}
+					if st == "failed" {
+						anyFailed = true
+					}
+				}
+				completedMu.Unlock()
+
+				var dialStatus string
+				if allBusy {
+					dialStatus = "busy"
+					r.addCallEvent("dial.busy", map[string]any{
+						"reason": "all_children_busy",
+					})
+				} else if anyFailed {
+					dialStatus = "failed"
+					r.addCallEvent("dial.failed", map[string]any{
+						"reason": "one_or_more_children_failed",
+					})
+				} else {
+					dialStatus = "no-answer"
+					r.addCallEvent("dial.no_answer", map[string]any{
+						"reason": "all_children_completed_without_answer",
+					})
+				}
+
+				return r.executeActionCallback(ctx, dial.Method, dial.Action, url.Values{
+					"DialCallStatus": {dialStatus},
+				}, currentTwimlDocumentURL, false)
 			}
 		}
-		childCallsMu.Unlock()
 	}
 
 	if answeredRunner == nil {
@@ -1437,7 +1497,7 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 bridgeEnded:
 	// Invoke recording callback if recording was enabled
 	if recordingStartTime != nil && dial.RecordingStatusCallback != "" {
-		r.invokeRecordingCallback(ctx, dial, nil, *recordingStartTime, answeredCallSID, currentTwimlDocumentURL)
+		r.invokeRecordingCallback(ctx, dial, nil, *recordingStartTime, r.call.SID, currentTwimlDocumentURL)
 	}
 
 	// Call action callback

@@ -339,6 +339,14 @@ func (e *EngineImpl) ListAccount(params *twilioopenapi.ListAccountParams) ([]twi
 
 // CreateCall initiates a new call using Twilio-compatible parameters
 func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error) {
+	return e.createCall(params, nil)
+}
+
+func (e *EngineImpl) createChildCall(params *twilioopenapi.CreateCallParams, parentCallSID *model.SID) (*twilioopenapi.ApiV2010Call, error) {
+	return e.createCall(params, parentCallSID)
+}
+
+func (e *EngineImpl) createCall(params *twilioopenapi.CreateCallParams, parentCallSID *model.SID) (*twilioopenapi.ApiV2010Call, error) {
 	if params == nil {
 		return nil, fmt.Errorf("params is required")
 	}
@@ -426,6 +434,7 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 		AccountSID:           accountSIDModel,
 		From:                 from,
 		To:                   to,
+		ParentCallSID:        parentCallSID,
 		Direction:            model.Outbound,
 		Status:               model.CallInitiated,
 		StartAt:              now,
@@ -456,11 +465,12 @@ func (e *EngineImpl) CreateCall(params *twilioopenapi.CreateCallParams) (*twilio
 
 	// Record event
 	e.addCallEventLocked(state, call, "call.created", map[string]any{
-		"sid":    call.SID,
-		"from":   call.From,
-		"to":     call.To,
-		"status": call.Status,
-		"params": params,
+		"sid":             call.SID,
+		"from":            call.From,
+		"to":              call.To,
+		"status":          call.Status,
+		"params":          params,
+		"parent_call_sid": parentCallSID,
 	})
 
 	state.calls[call.SID] = call
@@ -1284,10 +1294,9 @@ func (e *EngineImpl) SetCallBusy(subaccountSID, callSID model.SID) error {
 	})
 
 	if runner != nil {
-		select {
-		case runner.busyCh <- struct{}{}:
-		default:
-		}
+		runner.busyOnce.Do(func() {
+			close(runner.busyCh)
+		})
 	}
 
 	return nil
@@ -1322,10 +1331,9 @@ func (e *EngineImpl) SetCallFailed(subaccountSID, callSID model.SID) error {
 	})
 
 	if runner != nil {
-		select {
-		case runner.failedCh <- struct{}{}:
-		default:
-		}
+		runner.failedOnce.Do(func() {
+			close(runner.failedCh)
+		})
 	}
 
 	return nil
@@ -2271,6 +2279,7 @@ func (e *EngineImpl) sendCallStatusCallback(state *subAccountState, call *model.
 		"url":         call.StatusCallback,
 		"call_status": string(call.Status),
 		"status":      status,
+		"form":        form,
 		"error":       err,
 		"headers":     headers,
 		"body":        string(body),
