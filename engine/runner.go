@@ -251,7 +251,7 @@ func (r *CallRunner) fetchTwiML(ctx context.Context, method, targetURL string, f
 			"error": err.Error(),
 			"body":  string(body),
 		})
-		return nil, fmt.Errorf("failed to parse TwiML: %w", err)
+		return nil, fmt.Errorf("failed to parse TwiML at %s: %w", targetURL, err)
 	}
 
 	return resp, nil
