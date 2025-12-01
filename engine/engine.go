@@ -8,9 +8,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -425,7 +427,15 @@ func (e *EngineImpl) createCall(params *twilioopenapi.CreateCallParams, parentCa
 	defer state.mu.Unlock()
 
 	if state.incomingNumbers[from] == nil {
-		return nil, fmt.Errorf("from number %s not provisioned for account %s", from, accountSID)
+		if parentCallSID != nil {
+			// 'from' number of parent call is allowed to be used as 'from' on a child call
+			parentCall := state.calls[*parentCallSID]
+			if parentCall.From != from {
+				return nil, fmt.Errorf("from number %s not provisioned for account %s", from, accountSID)
+			}
+		} else {
+			return nil, fmt.Errorf("from number %s not provisioned for account %s", from, accountSID)
+		}
 	}
 
 	now := state.clock.Now()
@@ -628,7 +638,13 @@ func (e *EngineImpl) CreateIncomingPhoneNumber(params *twilioopenapi.CreateIncom
 		phone = *params.PhoneNumber
 	}
 	if phone == "" {
-		return nil, fmt.Errorf("PhoneNumber is required")
+		if params.AreaCode != nil {
+			// create a random phone number with the given area code using rand.Intn
+			// rand.Intn generates a random int in the range [0, n)
+			// to ensure a valid phone number, we need to add 1000000 to the result
+			// to get a number in the range [1000000, 9999999]
+			phone = fmt.Sprintf("+1%s%s", *params.AreaCode, strconv.Itoa(1000000+rand.Intn(9000000)))
+		}
 	}
 
 	accountSIDModel := model.SID(accountSID)
