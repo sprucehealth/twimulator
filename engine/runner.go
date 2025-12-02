@@ -1271,14 +1271,18 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 
 	// Dial all numbers
 	for _, number := range numbers {
-		resolvedURL, err := resolveURL(currentTwimlDocumentURL, number.URL)
-		if err != nil {
-			r.addCallEvent("number.url_error", map[string]any{
-				"action": number.URL,
-				"base":   currentTwimlDocumentURL,
-				"error":  err.Error(),
-			})
-			return err
+		var resolvedURL string
+		var err error
+		if number.URL != "" {
+			resolvedURL, err = resolveURL(currentTwimlDocumentURL, number.URL)
+			if err != nil {
+				r.addCallEvent("number.url_error", map[string]any{
+					"action": number.URL,
+					"base":   currentTwimlDocumentURL,
+					"error":  err.Error(),
+				})
+				return err
+			}
 		}
 		wg.Add(1)
 		go createChildCall(number.Number, resolvedURL, number.StatusCallback, number.StatusCallbackEvent)
@@ -1286,14 +1290,18 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 
 	// Dial all clients
 	for _, client := range clients {
-		resolvedURL, err := resolveURL(currentTwimlDocumentURL, client.URL)
-		if err != nil {
-			r.addCallEvent("client.url_error", map[string]any{
-				"action": client.URL,
-				"base":   currentTwimlDocumentURL,
-				"error":  err.Error(),
-			})
-			return err
+		var resolvedURL string
+		var err error
+		if client.URL != "" {
+			resolvedURL, err = resolveURL(currentTwimlDocumentURL, client.URL)
+			if err != nil {
+				r.addCallEvent("client.url_error", map[string]any{
+					"action": client.URL,
+					"base":   currentTwimlDocumentURL,
+					"error":  err.Error(),
+				})
+				return err
+			}
 		}
 		wg.Add(1)
 		go createChildCall("client:"+client.Name, resolvedURL, "", "")
@@ -1301,9 +1309,22 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 
 	// Dial all sips
 	for _, sip := range sips {
+		var resolvedURL string
+		var err error
+		if sip.URL != "" {
+			resolvedURL, err = resolveURL(currentTwimlDocumentURL, sip.URL)
+			if err != nil {
+				r.addCallEvent("sip.url_error", map[string]any{
+					"action": sip.URL,
+					"base":   currentTwimlDocumentURL,
+					"error":  err.Error(),
+				})
+				return err
+			}
+		}
 		wg.Add(1)
 		// SIP addresses are used as-is in the To field
-		go createChildCall(sip.SipAddress, "", "", "")
+		go createChildCall(sip.SipAddress, resolvedURL, "", "")
 	}
 
 	// Wait for all CreateCall operations to complete

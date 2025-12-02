@@ -113,6 +113,13 @@ type Hangup struct{}
 
 func (Hangup) isNode() {}
 
+// Reject rejects an incoming call
+type Reject struct {
+	Reason string // "rejected" or "busy", default is "rejected"
+}
+
+func (Reject) isNode() {}
+
 // Record records the caller's voice
 type Record struct {
 	MaxLength        time.Duration
@@ -137,7 +144,10 @@ func (Number) isNode() {}
 
 // Sip is used inside <Dial> to specify a sip address
 type Sip struct {
-	SipAddress string
+	StatusCallbackEvent string
+	StatusCallback      string
+	URL                 string
+	SipAddress          string
 }
 
 func (Sip) isNode() {}
