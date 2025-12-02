@@ -95,6 +95,8 @@ func parseNode(decoder *xml.Decoder, start *xml.StartElement) (Node, error) {
 		// Hangup is self-closing, consume the end tag
 		decoder.Skip()
 		return &Hangup{}, nil
+	case "Reject":
+		return parseReject(decoder, start)
 	case "Record":
 		return parseRecord(decoder, start)
 	case "Number":
@@ -423,8 +425,17 @@ func parseNumber(decoder *xml.Decoder, start *xml.StartElement) (*Number, error)
 func parseSip(decoder *xml.Decoder, start *xml.StartElement) (*Sip, error) {
 	sip := &Sip{}
 	for _, attr := range start.Attr {
-		if attr.Value != "" {
-			return nil, fmt.Errorf("unknown attribute '%s' on <Sip>", attr.Name.Local)
+		switch attr.Name.Local {
+		case "statusCallbackEvent":
+			sip.StatusCallbackEvent = attr.Value
+		case "statusCallback":
+			sip.StatusCallback = attr.Value
+		case "url":
+			sip.URL = attr.Value
+		default:
+			if attr.Value != "" {
+				return nil, fmt.Errorf("unknown attribute '%s' on <Sip>", attr.Name.Local)
+			}
 		}
 	}
 	if err := decoder.DecodeElement(&sip.SipAddress, start); err != nil {
@@ -603,4 +614,29 @@ func parseRecord(decoder *xml.Decoder, start *xml.StartElement) (*Record, error)
 
 	decoder.Skip()
 	return record, nil
+}
+
+func parseReject(decoder *xml.Decoder, start *xml.StartElement) (*Reject, error) {
+	reject := &Reject{
+		Reason: "rejected", // default value
+	}
+
+	for _, attr := range start.Attr {
+		switch attr.Name.Local {
+		case "reason":
+			// Validate that reason is either "rejected" or "busy"
+			if attr.Value == "rejected" || attr.Value == "busy" {
+				reject.Reason = attr.Value
+			} else {
+				return nil, fmt.Errorf("invalid reason '%s' on <Reject>: must be 'rejected' or 'busy'", attr.Value)
+			}
+		default:
+			if attr.Value != "" {
+				return nil, fmt.Errorf("unknown attribute '%s' on <Reject>", attr.Name.Local)
+			}
+		}
+	}
+
+	decoder.Skip()
+	return reject, nil
 }
