@@ -2270,22 +2270,22 @@ func (e *EngineImpl) sendCallStatusCallback(state *subAccountState, call *model.
 
 	status, body, headers, err := e.webhook.POST(ctx, call.StatusCallback, form)
 	if err != nil {
-		e.addCallEvent(state, call, "play.error", map[string]any{
+		e.addCallEvent(state, call, "webhook.status_callback.error", map[string]any{
 			"url":   call.StatusCallback,
 			"error": err.Error(),
 		})
-		err := fmt.Errorf("failed to fetch play URL %s: %w", call.StatusCallback, err)
+		err := fmt.Errorf("failed to fetch URL %s: %w", call.StatusCallback, err)
 		e.recordError(state, err)
 		return
 	}
 
 	// Check for non-2xx status codes
 	if status < 200 || status >= 300 {
-		e.addCallEvent(state, call, "play.error", map[string]any{
+		e.addCallEvent(state, call, "webhook.status_callback.error", map[string]any{
 			"url":    call.StatusCallback,
 			"status": status,
 		})
-		err := fmt.Errorf("play URL %s returned status %d", call.StatusCallback, status)
+		err := fmt.Errorf("webhook.status_callback URL %s returned status %d", call.StatusCallback, status)
 		e.recordError(state, err)
 		return
 	}
