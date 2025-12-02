@@ -1271,14 +1271,32 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 
 	// Dial all numbers
 	for _, number := range numbers {
+		resolvedURL, err := resolveURL(currentTwimlDocumentURL, number.URL)
+		if err != nil {
+			r.addCallEvent("number.url_error", map[string]any{
+				"action": number.URL,
+				"base":   currentTwimlDocumentURL,
+				"error":  err.Error(),
+			})
+			return err
+		}
 		wg.Add(1)
-		go createChildCall(number.Number, number.URL, number.StatusCallback, number.StatusCallbackEvent)
+		go createChildCall(number.Number, resolvedURL, number.StatusCallback, number.StatusCallbackEvent)
 	}
 
 	// Dial all clients
 	for _, client := range clients {
+		resolvedURL, err := resolveURL(currentTwimlDocumentURL, client.URL)
+		if err != nil {
+			r.addCallEvent("client.url_error", map[string]any{
+				"action": client.URL,
+				"base":   currentTwimlDocumentURL,
+				"error":  err.Error(),
+			})
+			return err
+		}
 		wg.Add(1)
-		go createChildCall("client:"+client.Name, client.URL, "", "")
+		go createChildCall("client:"+client.Name, resolvedURL, "", "")
 	}
 
 	// Dial all sips
@@ -2045,6 +2063,9 @@ func (r *CallRunner) buildCallForm() url.Values {
 	form.Set("Direction", string(r.call.Direction))
 	form.Set("ApiVersion", r.engine.apiVersion)
 
+	if r.call.ParentCallSID != nil {
+		form.Set("ParentCallSid", string(*r.call.ParentCallSID))
+	}
 	// Add custom variables
 	for k, v := range r.call.Variables {
 		form.Set(k, v)
