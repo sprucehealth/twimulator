@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -1221,6 +1222,8 @@ func (e *EngineImpl) UpdateCall(sid string, params *twilioopenapi.UpdateCallPara
 
 	// Record event if there were updates
 	if len(updatedFields) > 0 {
+		// add the call site in updatedFields
+		updatedFields["stack_trace"] = string(debug.Stack())
 		e.addCallEventLocked(state, call, "call.updated", updatedFields)
 	}
 
