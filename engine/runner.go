@@ -2006,10 +2006,12 @@ func (r *CallRunner) executeRecord(ctx context.Context, record *twiml.Record, cu
 }
 
 func (r *CallRunner) executeHangup(implicit bool) error {
+	eventType := "twiml.hangup.implicit"
 	if !implicit {
 		r.trackCallTwiML(&twiml.Hangup{})
+		eventType = "twiml.hangup"
 	}
-	r.addCallEvent("twiml.hangup", map[string]any{})
+	r.addCallEvent(eventType, map[string]any{})
 	r.updateStatus(model.CallCompleted)
 	now := r.clock.Now()
 	r.state.mu.Lock()
