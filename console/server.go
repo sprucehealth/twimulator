@@ -89,6 +89,51 @@ type signingKeyView struct {
 	UpdatedAt    time.Time
 }
 
+type sipDomainView struct {
+	SID                       string
+	DomainName                string
+	FriendlyName              string
+	VoiceUrl                  string
+	VoiceMethod               string
+	VoiceStatusCallbackUrl    string
+	VoiceStatusCallbackMethod string
+	SipRegistration           bool
+	Secure                    bool
+	AuthCallsMappingsCount    int
+	AuthRegMappingsCount      int
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+}
+
+type sipCredentialListView struct {
+	SID          string
+	FriendlyName string
+	Credentials  []sipCredentialView
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type sipCredentialView struct {
+	SID               string
+	Username          string
+	CredentialListSID string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type sipDomainDetailView struct {
+	sipDomainView
+	CallsMappings         []sipCredentialListMappingView
+	RegistrationsMappings []sipCredentialListMappingView
+}
+
+type sipCredentialListMappingView struct {
+	SID                  string
+	CredentialListSID    string
+	CredentialListName   string
+	CreatedAt            time.Time
+}
+
 // NewConsoleServer creates a new console server
 func NewConsoleServer(e engine.Engine, addr string) (*ConsoleServer, error) {
 	if addr == "" {
@@ -372,6 +417,171 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 	}
 	view.SigningKeys = signingKeys
 
+	// Extract SIP domains with detailed mappings
+	accountSIDStr := accountSID
+	sipDomainsDetailed := make([]sipDomainDetailView, len(subAccountModel.SipDomains))
+	for idx, domain := range subAccountModel.SipDomains {
+		// Build calls mappings with credential list names
+		callsMappings := make([]sipCredentialListMappingView, 0, len(domain.AuthCallsMappings))
+		for _, mapping := range domain.AuthCallsMappings {
+			// Find the credential list name
+			credListName := string(mapping.CredentialListSID)
+			// Try to fetch the credential list to get its friendly name
+			credListsResp, err := cs.engine.ListSipCredentialList(&openapi.ListSipCredentialListParams{
+				PathAccountSid: &accountSIDStr,
+			})
+			if err == nil {
+				for _, cl := range credListsResp {
+					if cl.Sid != nil && *cl.Sid == string(mapping.CredentialListSID) {
+						if cl.FriendlyName != nil {
+							credListName = *cl.FriendlyName
+						}
+						break
+					}
+				}
+			}
+
+			callsMappings = append(callsMappings, sipCredentialListMappingView{
+				SID:                string(mapping.SID),
+				CredentialListSID:  string(mapping.CredentialListSID),
+				CredentialListName: credListName,
+				CreatedAt:          mapping.CreatedAt,
+			})
+		}
+
+		// Build registrations mappings with credential list names
+		regMappings := make([]sipCredentialListMappingView, 0, len(domain.AuthRegistrationsMappings))
+		for _, mapping := range domain.AuthRegistrationsMappings {
+			credListName := string(mapping.CredentialListSID)
+			// Try to fetch the credential list to get its friendly name
+			credListsResp, err := cs.engine.ListSipCredentialList(&openapi.ListSipCredentialListParams{
+				PathAccountSid: &accountSIDStr,
+			})
+			if err == nil {
+				for _, cl := range credListsResp {
+					if cl.Sid != nil && *cl.Sid == string(mapping.CredentialListSID) {
+						if cl.FriendlyName != nil {
+							credListName = *cl.FriendlyName
+						}
+						break
+					}
+				}
+			}
+
+			regMappings = append(regMappings, sipCredentialListMappingView{
+				SID:                string(mapping.SID),
+				CredentialListSID:  string(mapping.CredentialListSID),
+				CredentialListName: credListName,
+				CreatedAt:          mapping.CreatedAt,
+			})
+		}
+
+		sipDomainsDetailed[idx] = sipDomainDetailView{
+			sipDomainView: sipDomainView{
+				SID:                       string(domain.SID),
+				DomainName:                domain.DomainName,
+				FriendlyName:              domain.FriendlyName,
+				VoiceUrl:                  domain.VoiceUrl,
+				VoiceMethod:               domain.VoiceMethod,
+				VoiceStatusCallbackUrl:    domain.VoiceStatusCallbackUrl,
+				VoiceStatusCallbackMethod: domain.VoiceStatusCallbackMethod,
+				SipRegistration:           domain.SipRegistration,
+				Secure:                    domain.Secure,
+				AuthCallsMappingsCount:    len(domain.AuthCallsMappings),
+				AuthRegMappingsCount:      len(domain.AuthRegistrationsMappings),
+				CreatedAt:                 domain.CreatedAt,
+				UpdatedAt:                 domain.UpdatedAt,
+			},
+			CallsMappings:         callsMappings,
+			RegistrationsMappings: regMappings,
+		}
+	}
+
+	// Extract credential lists from ListSipCredentialList API
+	// Since credential lists are stored separately in the engine state,
+	// we need to call the API to get them
+	credListsResp, err := cs.engine.ListSipCredentialList(&openapi.ListSipCredentialListParams{
+		PathAccountSid: &accountSIDStr,
+	})
+	if err != nil {
+		// If there's an error, just use empty list
+		credListsResp = []openapi.ApiV2010SipCredentialList{}
+	}
+
+	sipCredentialLists := make([]sipCredentialListView, 0, len(credListsResp))
+	for _, credList := range credListsResp {
+		var createdAt, updatedAt time.Time
+		if credList.DateCreated != nil {
+			if t, err := time.Parse(time.RFC1123Z, *credList.DateCreated); err == nil {
+				createdAt = t
+			}
+		}
+		if credList.DateUpdated != nil {
+			if t, err := time.Parse(time.RFC1123Z, *credList.DateUpdated); err == nil {
+				updatedAt = t
+			}
+		}
+		friendlyName := ""
+		if credList.FriendlyName != nil {
+			friendlyName = *credList.FriendlyName
+		}
+		sid := ""
+		if credList.Sid != nil {
+			sid = *credList.Sid
+		}
+
+		// Fetch credentials for this credential list
+		credentials := make([]sipCredentialView, 0)
+		if sid != "" {
+			credsResp, err := cs.engine.ListSipCredential(sid, &openapi.ListSipCredentialParams{
+				PathAccountSid: &accountSIDStr,
+			})
+			if err == nil {
+				for _, cred := range credsResp {
+					var credCreatedAt, credUpdatedAt time.Time
+					if cred.DateCreated != nil {
+						if t, err := time.Parse(time.RFC1123Z, *cred.DateCreated); err == nil {
+							credCreatedAt = t
+						}
+					}
+					if cred.DateUpdated != nil {
+						if t, err := time.Parse(time.RFC1123Z, *cred.DateUpdated); err == nil {
+							credUpdatedAt = t
+						}
+					}
+					username := ""
+					if cred.Username != nil {
+						username = *cred.Username
+					}
+					credSid := ""
+					if cred.Sid != nil {
+						credSid = *cred.Sid
+					}
+					credListSid := ""
+					if cred.CredentialListSid != nil {
+						credListSid = *cred.CredentialListSid
+					}
+
+					credentials = append(credentials, sipCredentialView{
+						SID:               credSid,
+						Username:          username,
+						CredentialListSID: credListSid,
+						CreatedAt:         credCreatedAt,
+						UpdatedAt:         credUpdatedAt,
+					})
+				}
+			}
+		}
+
+		sipCredentialLists = append(sipCredentialLists, sipCredentialListView{
+			SID:          sid,
+			FriendlyName: friendlyName,
+			Credentials:  credentials,
+			CreatedAt:    createdAt,
+			UpdatedAt:    updatedAt,
+		})
+	}
+
 	// Get calls for this account from the snapshot
 	calls := make([]*model.Call, 0, len(snap.Calls))
 	for _, call := range snap.Calls {
@@ -407,16 +617,18 @@ func (cs *ConsoleServer) handleSubAccountDetail(w http.ResponseWriter, r *http.R
 	})
 
 	data := map[string]any{
-		"SubAccount":   view,
-		"Applications": view.Applications,
-		"Numbers":      numbers,
-		"Addresses":    addresses,
-		"SigningKeys":  signingKeys,
-		"Calls":        calls,
-		"Queues":       queues,
-		"Conferences":  conferences,
-		"Recordings":   recordings,
-		"Timestamp":    snap.Timestamp,
+		"SubAccount":          view,
+		"Applications":        view.Applications,
+		"Numbers":             numbers,
+		"Addresses":           addresses,
+		"SigningKeys":         signingKeys,
+		"SipDomains":          sipDomainsDetailed,
+		"SipCredentialLists":  sipCredentialLists,
+		"Calls":               calls,
+		"Queues":              queues,
+		"Conferences":         conferences,
+		"Recordings":          recordings,
+		"Timestamp":           snap.Timestamp,
 	}
 
 	if err := cs.tmpl.ExecuteTemplate(w, "subaccount.html", data); err != nil {

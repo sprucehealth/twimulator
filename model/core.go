@@ -85,6 +85,7 @@ type Call struct {
 	StatusCallback       string            `json:"status_callback,omitempty"`
 	StatusCallbackEvents []CallStatus      `json:"status_callback_events,omitempty"` // Events to trigger callbacks for
 	InitialParams        map[string]string `json:"initial_params,omitempty"`
+	SIPDomainSID         string            `json:"sip_domain_sid,omitempty"`
 
 	// CallbackQueue serializes status callbacks for this call
 	// This is not serialized to JSON as it's internal state
@@ -148,6 +149,7 @@ type SubAccount struct {
 	Applications    []Application    `json:"applications"`
 	Addresses       []Address        `json:"addresses"`
 	SigningKeys     []SigningKey     `json:"signing_keys"`
+	SipDomains      []SipDomain      `json:"sip_domains"`
 }
 
 // IncomingNumber represents a provisioned phone number
@@ -208,17 +210,80 @@ type Recording struct {
 	CreatedAt  time.Time `json:"date_created"`
 }
 
+// SipDomain represents a Twilio SIP Domain
+type SipDomain struct {
+	SID                       SID                                         `json:"sid"`
+	AccountSID                SID                                         `json:"account_sid"`
+	DomainName                string                                      `json:"domain_name"`
+	FriendlyName              string                                      `json:"friendly_name"`
+	VoiceUrl                  string                                      `json:"voice_url,omitempty"`
+	VoiceMethod               string                                      `json:"voice_method,omitempty"`
+	VoiceStatusCallbackUrl    string                                      `json:"voice_status_callback_url,omitempty"`
+	VoiceStatusCallbackMethod string                                      `json:"voice_status_callback_method,omitempty"`
+	SipRegistration           bool                                        `json:"sip_registration"`
+	Secure                    bool                                        `json:"secure"` // SRTP
+	AuthCallsMappings         []SipAuthCallsCredentialListMapping         `json:"auth_calls_mappings"`
+	AuthRegistrationsMappings []SipAuthRegistrationsCredentialListMapping `json:"auth_registrations_mappings"`
+	CreatedAt                 time.Time                                   `json:"date_created"`
+	UpdatedAt                 time.Time                                   `json:"date_updated"`
+}
+
+// SipCredentialList represents a Twilio SIP Credential List
+type SipCredentialList struct {
+	SID          SID       `json:"sid"`
+	AccountSID   SID       `json:"account_sid"`
+	FriendlyName string    `json:"friendly_name"`
+	CreatedAt    time.Time `json:"date_created"`
+	UpdatedAt    time.Time `json:"date_updated"`
+}
+
+// SipCredential represents a Twilio SIP Credential
+type SipCredential struct {
+	SID               SID       `json:"sid"`
+	AccountSID        SID       `json:"account_sid"`
+	CredentialListSID SID       `json:"credential_list_sid"`
+	Username          string    `json:"username"`
+	Password          string    `json:"password"` // Stored, but not returned in API responses
+	CreatedAt         time.Time `json:"date_created"`
+	UpdatedAt         time.Time `json:"date_updated"`
+}
+
+// SipAuthCallsCredentialListMapping represents mapping of credential list to SIP domain for calls
+type SipAuthCallsCredentialListMapping struct {
+	SID               SID       `json:"sid"`
+	AccountSID        SID       `json:"account_sid"`
+	DomainSID         SID       `json:"domain_sid"`
+	CredentialListSID SID       `json:"credential_list_sid"`
+	CreatedAt         time.Time `json:"date_created"`
+	UpdatedAt         time.Time `json:"date_updated"`
+}
+
+// SipAuthRegistrationsCredentialListMapping represents mapping of credential list to SIP domain for registrations
+type SipAuthRegistrationsCredentialListMapping struct {
+	SID               SID       `json:"sid"`
+	AccountSID        SID       `json:"account_sid"`
+	DomainSID         SID       `json:"domain_sid"`
+	CredentialListSID SID       `json:"credential_list_sid"`
+	CreatedAt         time.Time `json:"date_created"`
+	UpdatedAt         time.Time `json:"date_updated"`
+}
+
 // SID generators with atomic counters for determinism
 var (
-	callCounter        uint64
-	conferenceCounter  uint64
-	queueCounter       uint64
-	subAccountCounter  uint64
-	phoneNumberCounter uint64
-	applicationCounter uint64
-	recordingCounter   uint64
-	addressCounter     uint64
-	signingKeyCounter  uint64
+	callCounter                        uint64
+	conferenceCounter                  uint64
+	queueCounter                       uint64
+	subAccountCounter                  uint64
+	phoneNumberCounter                 uint64
+	applicationCounter                 uint64
+	recordingCounter                   uint64
+	addressCounter                     uint64
+	signingKeyCounter                  uint64
+	sipDomainCounter                   uint64
+	sipCredentialListCounter           uint64
+	sipCredentialCounter               uint64
+	sipAuthCallsMappingCounter         uint64
+	sipAuthRegistrationsMappingCounter uint64
 )
 
 // NewCallSID generates a new Call SID (CAFAKE prefix, 34 chars total)
@@ -307,6 +372,46 @@ func NewAuthToken() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// NewSipDomainSID generates a new SIP Domain SID (SDFAKE prefix, 34 chars total)
+func NewSipDomainSID() SID {
+	counter := atomic.AddUint64(&sipDomainCounter, 1)
+	b := make([]byte, 7)
+	rand.Read(b)
+	return SID(fmt.Sprintf("SDFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
+}
+
+// NewSipCredentialListSID generates a new SIP Credential List SID (CLFAKE prefix, 34 chars total)
+func NewSipCredentialListSID() SID {
+	counter := atomic.AddUint64(&sipCredentialListCounter, 1)
+	b := make([]byte, 7)
+	rand.Read(b)
+	return SID(fmt.Sprintf("CLFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
+}
+
+// NewSipCredentialSID generates a new SIP Credential SID (CRFAKE prefix, 34 chars total)
+func NewSipCredentialSID() SID {
+	counter := atomic.AddUint64(&sipCredentialCounter, 1)
+	b := make([]byte, 7)
+	rand.Read(b)
+	return SID(fmt.Sprintf("CRFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
+}
+
+// NewSipAuthCallsMappingSID generates a new SIP Auth Calls Mapping SID (CMFAKE prefix, 34 chars total)
+func NewSipAuthCallsMappingSID() SID {
+	counter := atomic.AddUint64(&sipAuthCallsMappingCounter, 1)
+	b := make([]byte, 7)
+	rand.Read(b)
+	return SID(fmt.Sprintf("CMFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
+}
+
+// NewSipAuthRegistrationsMappingSID generates a new SIP Auth Registrations Mapping SID (RMFAKE prefix, 34 chars total)
+func NewSipAuthRegistrationsMappingSID() SID {
+	counter := atomic.AddUint64(&sipAuthRegistrationsMappingCounter, 1)
+	b := make([]byte, 7)
+	rand.Read(b)
+	return SID(fmt.Sprintf("RMFAKE%014x%s", counter, hex.EncodeToString(b)[:14]))
 }
 
 // NewEvent creates a new timeline event
