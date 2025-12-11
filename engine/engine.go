@@ -41,10 +41,21 @@ type Engine interface {
 	CreateAddress(params *twilioopenapi.CreateAddressParams) (*twilioopenapi.ApiV2010Address, error)
 	CreateNewSigningKey(params *twilioopenapi.CreateNewSigningKeyParams) (*twilioopenapi.ApiV2010NewSigningKey, error)
 
+	// SIP Domain and Credential management
+	CreateSipDomain(params *twilioopenapi.CreateSipDomainParams) (*twilioopenapi.ApiV2010SipDomain, error)
+	ListSipCredentialList(params *twilioopenapi.ListSipCredentialListParams) ([]twilioopenapi.ApiV2010SipCredentialList, error)
+	CreateSipCredentialList(params *twilioopenapi.CreateSipCredentialListParams) (*twilioopenapi.ApiV2010SipCredentialList, error)
+	CreateSipAuthCallsCredentialListMapping(DomainSid string, params *twilioopenapi.CreateSipAuthCallsCredentialListMappingParams) (*twilioopenapi.ApiV2010SipAuthCallsCredentialListMapping, error)
+	CreateSipAuthRegistrationsCredentialListMapping(DomainSid string, params *twilioopenapi.CreateSipAuthRegistrationsCredentialListMappingParams) (*twilioopenapi.ApiV2010SipAuthRegistrationsCredentialListMapping, error)
+	PageSipAuthCallsCredentialListMapping(DomainSid string, params *twilioopenapi.ListSipAuthCallsCredentialListMappingParams, pageToken, pageNumber string) (*twilioopenapi.ListSipAuthCallsCredentialListMappingResponse, error)
+	CreateSipCredential(CredentialListSid string, params *twilioopenapi.CreateSipCredentialParams) (*twilioopenapi.ApiV2010SipCredential, error)
+	ListSipCredential(CredentialListSid string, params *twilioopenapi.ListSipCredentialParams) ([]twilioopenapi.ApiV2010SipCredential, error)
+
 	// Core lifecycle
 	CreateCall(params *twilioopenapi.CreateCallParams) (*twilioopenapi.ApiV2010Call, error)
 	CreateIncomingCall(accountSID model.SID, from string, to string) (*twilioopenapi.ApiV2010Call, error)
-	CreateIncomingCallWithParams(accountSID model.SID, from string, to string, accessToken string, params map[string]string) (*twilioopenapi.ApiV2010Call, error)
+	CreateIncomingCallFromSoftphone(accountSID model.SID, from string, to string, accessToken string, params map[string]string) (*twilioopenapi.ApiV2010Call, error)
+	CreateIncomingCallFromSIP(accountSID model.SID, fromSIP string, toSIP string) (*twilioopenapi.ApiV2010Call, error)
 	UpdateCall(sid string, params *twilioopenapi.UpdateCallParams) (*twilioopenapi.ApiV2010Call, error)
 	AnswerCall(subaccountSID model.SID, callSID model.SID) error
 	SetCallBusy(subaccountSID model.SID, callSID model.SID) error
@@ -111,16 +122,21 @@ type subAccountState struct {
 	clock   Clock
 
 	// Resources scoped to this subaccount
-	incomingNumbers map[string]*incomingNumber
-	applications    map[model.SID]*applicationRecord
-	addresses       map[model.SID]*model.Address
-	signingKeys     map[string]*model.SigningKey
-	calls           map[model.SID]*model.Call
-	queues          map[string]*model.Queue
-	conferences     map[string]*model.Conference
-	runners         map[model.SID]*CallRunner
-	errors          []error
-	recordings      map[model.SID]*model.Recording // Recordings by SID
+	incomingNumbers      map[string]*incomingNumber
+	applications         map[model.SID]*applicationRecord
+	addresses            map[model.SID]*model.Address
+	signingKeys          map[string]*model.SigningKey
+	sipDomains           map[model.SID]*model.SipDomain
+	sipCredentialLists   map[model.SID]*model.SipCredentialList
+	sipCredentials       map[model.SID]*model.SipCredential
+	sipAuthCallsMappings map[model.SID]*model.SipAuthCallsCredentialListMapping
+	sipAuthRegMappings   map[model.SID]*model.SipAuthRegistrationsCredentialListMapping
+	calls                map[model.SID]*model.Call
+	queues               map[string]*model.Queue
+	conferences          map[string]*model.Conference
+	runners              map[model.SID]*CallRunner
+	errors               []error
+	recordings           map[model.SID]*model.Recording // Recordings by SID
 
 	// Participant states scoped by (conferenceSID, callSID)
 	participantStates map[model.SID]map[model.SID]*model.ParticipantState
@@ -252,20 +268,25 @@ func (e *EngineImpl) CreateAccount(params *twilioopenapi.CreateAccountParams) (*
 
 	// Create new subaccount state
 	state := &subAccountState{
-		clock:             e.defaultClock,
-		account:           subAccount,
-		incomingNumbers:   make(map[string]*incomingNumber),
-		applications:      make(map[model.SID]*applicationRecord),
-		addresses:         make(map[model.SID]*model.Address),
-		signingKeys:       make(map[string]*model.SigningKey),
-		calls:             make(map[model.SID]*model.Call),
-		queues:            make(map[string]*model.Queue),
-		conferences:       make(map[string]*model.Conference),
-		runners:           make(map[model.SID]*CallRunner),
-		recordings:        make(map[model.SID]*model.Recording),
-		participantStates: make(map[model.SID]map[model.SID]*model.ParticipantState),
-		callRecordings:    make(map[model.SID]model.SID),
-		callVoicemails:    make(map[model.SID]model.SID),
+		clock:                e.defaultClock,
+		account:              subAccount,
+		incomingNumbers:      make(map[string]*incomingNumber),
+		applications:         make(map[model.SID]*applicationRecord),
+		addresses:            make(map[model.SID]*model.Address),
+		signingKeys:          make(map[string]*model.SigningKey),
+		sipDomains:           make(map[model.SID]*model.SipDomain),
+		sipCredentialLists:   make(map[model.SID]*model.SipCredentialList),
+		sipCredentials:       make(map[model.SID]*model.SipCredential),
+		sipAuthCallsMappings: make(map[model.SID]*model.SipAuthCallsCredentialListMapping),
+		sipAuthRegMappings:   make(map[model.SID]*model.SipAuthRegistrationsCredentialListMapping),
+		calls:                make(map[model.SID]*model.Call),
+		queues:               make(map[string]*model.Queue),
+		conferences:          make(map[string]*model.Conference),
+		runners:              make(map[model.SID]*CallRunner),
+		recordings:           make(map[model.SID]*model.Recording),
+		participantStates:    make(map[model.SID]map[model.SID]*model.ParticipantState),
+		callRecordings:       make(map[model.SID]model.SID),
+		callVoicemails:       make(map[model.SID]model.SID),
 	}
 
 	// Only lock when adding to subaccounts map
@@ -427,18 +448,27 @@ func (e *EngineImpl) createCall(params *twilioopenapi.CreateCallParams, parentCa
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	if state.incomingNumbers[from] == nil {
-		if parentCallSID != nil {
+	validateFromNumber := func() error {
+		if state.incomingNumbers[from] != nil {
+			return nil
+		}
+		if strings.HasPrefix(to, "sip:") {
+			// There is no validation on from number for SIP calls
+			return nil
+		} else if parentCallSID != nil {
 			// 'from' number of parent call is allowed to be used as 'from' on a child call
 			parentCall := state.calls[*parentCallSID]
 			if parentCall.From != from {
-				return nil, fmt.Errorf("from number %s not provisioned for account %s", from, accountSID)
+				return fmt.Errorf("from number %s not provisioned for account %s", from, accountSID)
 			}
+			return nil
 		} else {
-			return nil, fmt.Errorf("from number %s not provisioned for account %s", from, accountSID)
+			return fmt.Errorf("from number %s not provisioned for account %s", from, accountSID)
 		}
 	}
-
+	if err := validateFromNumber(); err != nil {
+		return nil, err
+	}
 	now := state.clock.Now()
 	call := &model.Call{
 		SID:                  model.NewCallSID(),
@@ -500,26 +530,32 @@ func (e *EngineImpl) createCall(params *twilioopenapi.CreateCallParams, parentCa
 
 // CreateIncomingCall simulates an incoming call to a number with an application
 func (e *EngineImpl) CreateIncomingCall(accountSID model.SID, from string, to string) (*twilioopenapi.ApiV2010Call, error) {
-	return e.CreateIncomingCallWithParams(accountSID, from, to, "", map[string]string{})
+	return e.createIncomingCallWithParams(accountSID, from, to, map[string]string{}, func(state *subAccountState, call *model.Call) (*model.Call, error) {
+		// Find the incoming number
+		incomingNum := state.incomingNumbers[to]
+		if incomingNum == nil {
+			return nil, fmt.Errorf("to number %s not provisioned for account %s", to, accountSID)
+		}
+
+		// Validate the number has an application configured
+		if incomingNum.VoiceApplication == nil {
+			return nil, fmt.Errorf("number %s does not have a voice application configured", to)
+		}
+		applicationSID := incomingNum.VoiceApplication
+		if applicationSID == nil {
+			return nil, fmt.Errorf("no application configured for account %s", accountSID)
+		}
+		// Get the application configuration
+		app := state.applications[*applicationSID]
+		call.Method = app.VoiceMethod
+		call.Url = app.VoiceURL
+		call.StatusCallback = app.StatusCallback
+		return call, nil
+	})
 }
 
-// CreateIncomingCallWithParams simulates an incoming call
-func (e *EngineImpl) CreateIncomingCallWithParams(accountSID model.SID, from string, to string, accessToken string, params map[string]string) (*twilioopenapi.ApiV2010Call, error) {
-	// Get subaccount state
-	e.subAccountsMu.RLock()
-	state, exists := e.subAccounts[accountSID]
-	e.subAccountsMu.RUnlock()
-
-	if !exists {
-		return nil, notFoundError(accountSID)
-	}
-
-	// Lock only this subaccount
-	state.mu.Lock()
-	defer state.mu.Unlock()
-
-	var applicationSID *model.SID
-	if accessToken != "" {
+func (e *EngineImpl) CreateIncomingCallFromSoftphone(accountSID model.SID, from string, to string, accessToken string, params map[string]string) (*twilioopenapi.ApiV2010Call, error) {
+	return e.createIncomingCallWithParams(accountSID, from, to, params, func(state *subAccountState, call *model.Call) (*model.Call, error) {
 		// First parse without validation to get the signing key SID
 		decodedToken, err := ParseJWTToken(accessToken, "")
 		if err != nil {
@@ -539,36 +575,83 @@ func (e *EngineImpl) CreateIncomingCallWithParams(accountSID model.SID, from str
 			return nil, fmt.Errorf("failed to extract application SID from token: %w", err)
 		}
 		appSIDModel := model.SID(appSID)
-		applicationSID = &appSIDModel
-	}
+		applicationSID := &appSIDModel
+		if applicationSID == nil {
+			return nil, fmt.Errorf("no application configured for account %s", accountSID)
+		}
+		// Get the application configuration
+		app := state.applications[*applicationSID]
+		call.Method = app.VoiceMethod
+		call.Url = app.VoiceURL
+		call.StatusCallback = app.StatusCallback
+		return call, nil
+	})
+}
 
-	if applicationSID == nil && to != "" {
-		// Find the incoming number
-		incomingNum := state.incomingNumbers[to]
-		if incomingNum == nil {
-			return nil, fmt.Errorf("to number %s not provisioned for account %s", to, accountSID)
+func (e *EngineImpl) CreateIncomingCallFromSIP(accountSID model.SID, fromSIP string, toSIP string) (*twilioopenapi.ApiV2010Call, error) {
+	return e.createIncomingCallWithParams(accountSID, fromSIP, toSIP, map[string]string{}, func(state *subAccountState, call *model.Call) (*model.Call, error) {
+		name, domain, err := parseSIPURI(fromSIP)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse SIP URI: %w", err)
+		}
+		var domainModel *model.SipDomain
+		for _, sipDomain := range state.sipDomains {
+			if sipDomain.DomainName == domain {
+				domainModel = sipDomain
+				break
+			}
+		}
+		if domainModel == nil {
+			return nil, fmt.Errorf("SIP domain %s not found", domain)
 		}
 
-		// Validate the number has an application configured
-		if incomingNum.VoiceApplication == nil {
-			return nil, fmt.Errorf("number %s does not have a voice application configured", to)
+		// Validate credentials by checking if the username exists in the mapped credential lists
+		credentialValid := false
+		for _, mapping := range domainModel.AuthCallsMappings {
+			// Get the credential list
+			credList, exists := state.sipCredentialLists[mapping.CredentialListSID]
+			if !exists {
+				continue
+			}
+
+			// Check if any credential in this list matches the username
+			for _, cred := range state.sipCredentials {
+				if cred.CredentialListSID == credList.SID && cred.Username == name {
+					credentialValid = true
+					break
+				}
+			}
+			if credentialValid {
+				break
+			}
 		}
-		applicationSID = incomingNum.VoiceApplication
-	}
-	if applicationSID == nil {
-		return nil, fmt.Errorf("no application configured for account %s", accountSID)
-	}
-	// Get the application configuration
-	app := state.applications[*applicationSID]
-	if app == nil {
-		return nil, fmt.Errorf("application %s not found for account %s", *applicationSID, accountSID)
+
+		if !credentialValid {
+			return nil, fmt.Errorf("no valid credentials found for SIP user %s in domain %s", name, domain)
+		}
+
+		call.Method = domainModel.VoiceMethod
+		call.Url = domainModel.VoiceUrl
+		call.StatusCallback = domainModel.VoiceStatusCallbackUrl
+		call.SIPDomainSID = domainModel.SID.String()
+		return call, nil
+	})
+}
+
+// CreateIncomingCallWithParams simulates an incoming call
+func (e *EngineImpl) createIncomingCallWithParams(accountSID model.SID, from string, to string, params map[string]string, mutate func(state *subAccountState, call *model.Call) (*model.Call, error)) (*twilioopenapi.ApiV2010Call, error) {
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
 	}
 
-	// Validate application has VoiceURL configured
-	if app.VoiceURL == "" {
-		return nil, fmt.Errorf("application %s does not have a VoiceURL configured", app.SID)
-	}
-
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	// Create the call with application's configuration
 	now := state.clock.Now()
 	call := &model.Call{
@@ -581,14 +664,14 @@ func (e *EngineImpl) CreateIncomingCallWithParams(accountSID model.SID, from str
 		StartAt:              now,
 		Timeline:             []model.Event{},
 		Variables:            make(map[string]string),
-		Url:                  app.VoiceURL,
 		InitialParams:        params,
-		Method:               app.VoiceMethod,
-		StatusCallback:       app.StatusCallback,
 		StatusCallbackEvents: []model.CallStatus{model.CallCompleted}, // Twiml application only sends the completed event
 		CallbackQueue:        make(chan func(), 10),                   // Buffered to avoid blocking
 	}
-
+	call, err := mutate(state, call)
+	if err != nil {
+		return nil, fmt.Errorf("failed to mutate call: %w", err)
+	}
 	// Start worker goroutine to process callbacks serially for this call
 	go func() {
 		for fn := range call.CallbackQueue {
@@ -598,11 +681,10 @@ func (e *EngineImpl) CreateIncomingCallWithParams(accountSID model.SID, from str
 
 	// Record event
 	e.addCallEventLocked(state, call, "call.created", map[string]any{
-		"sid":         call.SID,
-		"from":        call.From,
-		"to":          call.To,
-		"status":      call.Status,
-		"application": app.SID,
+		"sid":    call.SID,
+		"from":   call.From,
+		"to":     call.To,
+		"status": call.Status,
 	})
 
 	state.calls[call.SID] = call
@@ -1164,6 +1246,520 @@ func (e *EngineImpl) CreateNewSigningKey(params *twilioopenapi.CreateNewSigningK
 		DateUpdated:  &dateUpdated,
 		Secret:       &secretStr,
 	}, nil
+}
+
+// CreateSipDomain creates a new SIP domain for the account
+func (e *EngineImpl) CreateSipDomain(params *twilioopenapi.CreateSipDomainParams) (*twilioopenapi.ApiV2010SipDomain, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	if params.DomainName == nil || *params.DomainName == "" {
+		return nil, fmt.Errorf("DomainName is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	now := state.clock.Now()
+	sid := model.NewSipDomainSID()
+
+	// Extract parameters
+	domainName := *params.DomainName
+	friendlyName := ""
+	if params.FriendlyName != nil {
+		friendlyName = *params.FriendlyName
+	}
+	voiceUrl := ""
+	if params.VoiceUrl != nil {
+		voiceUrl = *params.VoiceUrl
+	}
+	voiceMethod := "POST"
+	if params.VoiceMethod != nil {
+		voiceMethod = *params.VoiceMethod
+	}
+	voiceStatusCallbackUrl := ""
+	if params.VoiceStatusCallbackUrl != nil {
+		voiceStatusCallbackUrl = *params.VoiceStatusCallbackUrl
+	}
+	voiceStatusCallbackMethod := "POST"
+	if params.VoiceStatusCallbackMethod != nil {
+		voiceStatusCallbackMethod = *params.VoiceStatusCallbackMethod
+	}
+	sipRegistration := false
+	if params.SipRegistration != nil {
+		sipRegistration = *params.SipRegistration
+	}
+	secure := false
+	if params.Secure != nil {
+		secure = *params.Secure
+	}
+
+	// Create the SIP domain
+	sipDomain := &model.SipDomain{
+		SID:                       sid,
+		AccountSID:                accountSID,
+		DomainName:                domainName,
+		FriendlyName:              friendlyName,
+		VoiceUrl:                  voiceUrl,
+		VoiceMethod:               voiceMethod,
+		VoiceStatusCallbackUrl:    voiceStatusCallbackUrl,
+		VoiceStatusCallbackMethod: voiceStatusCallbackMethod,
+		SipRegistration:           sipRegistration,
+		Secure:                    secure,
+		AuthCallsMappings:         []model.SipAuthCallsCredentialListMapping{},
+		AuthRegistrationsMappings: []model.SipAuthRegistrationsCredentialListMapping{},
+		CreatedAt:                 now,
+		UpdatedAt:                 now,
+	}
+
+	state.sipDomains[sid] = sipDomain
+	state.account.SipDomains = append(state.account.SipDomains, *sipDomain)
+
+	// Convert to Twilio API response format
+	sidStr := string(sid)
+	accountSidStr := string(accountSID)
+	dateCreated := now.UTC().Format(time.RFC1123Z)
+	dateUpdated := now.UTC().Format(time.RFC1123Z)
+
+	return &twilioopenapi.ApiV2010SipDomain{
+		Sid:                       &sidStr,
+		AccountSid:                &accountSidStr,
+		DomainName:                &domainName,
+		FriendlyName:              &friendlyName,
+		VoiceUrl:                  &voiceUrl,
+		VoiceMethod:               &voiceMethod,
+		VoiceStatusCallbackUrl:    &voiceStatusCallbackUrl,
+		VoiceStatusCallbackMethod: &voiceStatusCallbackMethod,
+		SipRegistration:           &sipRegistration,
+		Secure:                    &secure,
+		DateCreated:               &dateCreated,
+		DateUpdated:               &dateUpdated,
+	}, nil
+}
+
+// ListSipCredentialList returns all SIP credential lists for an account
+func (e *EngineImpl) ListSipCredentialList(params *twilioopenapi.ListSipCredentialListParams) ([]twilioopenapi.ApiV2010SipCredentialList, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	results := make([]twilioopenapi.ApiV2010SipCredentialList, 0, len(state.sipCredentialLists))
+	for _, credList := range state.sipCredentialLists {
+		sidStr := string(credList.SID)
+		accountSidStr := string(credList.AccountSID)
+		dateCreated := credList.CreatedAt.UTC().Format(time.RFC1123Z)
+		dateUpdated := credList.UpdatedAt.UTC().Format(time.RFC1123Z)
+		friendlyName := credList.FriendlyName
+
+		results = append(results, twilioopenapi.ApiV2010SipCredentialList{
+			Sid:          &sidStr,
+			AccountSid:   &accountSidStr,
+			FriendlyName: &friendlyName,
+			DateCreated:  &dateCreated,
+			DateUpdated:  &dateUpdated,
+		})
+	}
+
+	return results, nil
+}
+
+// CreateSipCredentialList creates a new SIP credential list for the account
+func (e *EngineImpl) CreateSipCredentialList(params *twilioopenapi.CreateSipCredentialListParams) (*twilioopenapi.ApiV2010SipCredentialList, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	if params.FriendlyName == nil || *params.FriendlyName == "" {
+		return nil, fmt.Errorf("FriendlyName is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+	friendlyName := *params.FriendlyName
+
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	now := state.clock.Now()
+	sid := model.NewSipCredentialListSID()
+
+	// Create the SIP credential list
+	credentialList := &model.SipCredentialList{
+		SID:          sid,
+		AccountSID:   accountSID,
+		FriendlyName: friendlyName,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	state.sipCredentialLists[sid] = credentialList
+
+	// Convert to Twilio API response format
+	sidStr := string(sid)
+	accountSidStr := string(accountSID)
+	dateCreated := now.UTC().Format(time.RFC1123Z)
+	dateUpdated := now.UTC().Format(time.RFC1123Z)
+
+	return &twilioopenapi.ApiV2010SipCredentialList{
+		Sid:          &sidStr,
+		AccountSid:   &accountSidStr,
+		FriendlyName: &friendlyName,
+		DateCreated:  &dateCreated,
+		DateUpdated:  &dateUpdated,
+	}, nil
+}
+
+// CreateSipAuthCallsCredentialListMapping creates a mapping between a credential list and a SIP domain for calls
+func (e *EngineImpl) CreateSipAuthCallsCredentialListMapping(DomainSid string, params *twilioopenapi.CreateSipAuthCallsCredentialListMappingParams) (*twilioopenapi.ApiV2010SipAuthCallsCredentialListMapping, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	if params.CredentialListSid == nil || *params.CredentialListSid == "" {
+		return nil, fmt.Errorf("CredentialListSid is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+	credentialListSID := model.SID(*params.CredentialListSid)
+	domainSID := model.SID(DomainSid)
+
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	// Verify the SIP domain exists
+	sipDomain, exists := state.sipDomains[domainSID]
+	if !exists {
+		return nil, fmt.Errorf("SIP domain %s not found", DomainSid)
+	}
+
+	// Verify the credential list exists
+	_, exists = state.sipCredentialLists[credentialListSID]
+	if !exists {
+		return nil, fmt.Errorf("Credential list %s not found", *params.CredentialListSid)
+	}
+
+	now := state.clock.Now()
+	sid := model.NewSipAuthCallsMappingSID()
+
+	// Create the mapping
+	mapping := &model.SipAuthCallsCredentialListMapping{
+		SID:               sid,
+		AccountSID:        accountSID,
+		DomainSID:         domainSID,
+		CredentialListSID: credentialListSID,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	state.sipAuthCallsMappings[sid] = mapping
+	sipDomain.AuthCallsMappings = append(sipDomain.AuthCallsMappings, *mapping)
+
+	// Convert to Twilio API response format
+	sidStr := string(sid)
+	accountSidStr := string(accountSID)
+	dateCreated := now.UTC().Format(time.RFC1123Z)
+	dateUpdated := now.UTC().Format(time.RFC1123Z)
+
+	return &twilioopenapi.ApiV2010SipAuthCallsCredentialListMapping{
+		Sid:         &sidStr,
+		AccountSid:  &accountSidStr,
+		DateCreated: &dateCreated,
+		DateUpdated: &dateUpdated,
+	}, nil
+}
+
+// CreateSipAuthRegistrationsCredentialListMapping creates a mapping between a credential list and a SIP domain for registrations
+func (e *EngineImpl) CreateSipAuthRegistrationsCredentialListMapping(DomainSid string, params *twilioopenapi.CreateSipAuthRegistrationsCredentialListMappingParams) (*twilioopenapi.ApiV2010SipAuthRegistrationsCredentialListMapping, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	if params.CredentialListSid == nil || *params.CredentialListSid == "" {
+		return nil, fmt.Errorf("CredentialListSid is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+	credentialListSID := model.SID(*params.CredentialListSid)
+	domainSID := model.SID(DomainSid)
+
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	// Verify the SIP domain exists
+	sipDomain, exists := state.sipDomains[domainSID]
+	if !exists {
+		return nil, fmt.Errorf("SIP domain %s not found", DomainSid)
+	}
+
+	// Verify the credential list exists
+	_, exists = state.sipCredentialLists[credentialListSID]
+	if !exists {
+		return nil, fmt.Errorf("Credential list %s not found", *params.CredentialListSid)
+	}
+
+	now := state.clock.Now()
+	sid := model.NewSipAuthRegistrationsMappingSID()
+
+	// Create the mapping
+	mapping := &model.SipAuthRegistrationsCredentialListMapping{
+		SID:               sid,
+		AccountSID:        accountSID,
+		DomainSID:         domainSID,
+		CredentialListSID: credentialListSID,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	state.sipAuthRegMappings[sid] = mapping
+	sipDomain.AuthRegistrationsMappings = append(sipDomain.AuthRegistrationsMappings, *mapping)
+
+	// Convert to Twilio API response format
+	sidStr := string(sid)
+	accountSidStr := string(accountSID)
+	dateCreated := now.UTC().Format(time.RFC1123Z)
+	dateUpdated := now.UTC().Format(time.RFC1123Z)
+
+	return &twilioopenapi.ApiV2010SipAuthRegistrationsCredentialListMapping{
+		Sid:         &sidStr,
+		AccountSid:  &accountSidStr,
+		DateCreated: &dateCreated,
+		DateUpdated: &dateUpdated,
+	}, nil
+}
+
+// PageSipAuthCallsCredentialListMapping returns a page of auth calls credential list mappings for a SIP domain
+func (e *EngineImpl) PageSipAuthCallsCredentialListMapping(DomainSid string, params *twilioopenapi.ListSipAuthCallsCredentialListMappingParams, pageToken, pageNumber string) (*twilioopenapi.ListSipAuthCallsCredentialListMappingResponse, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+	domainSID := model.SID(DomainSid)
+
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	// Verify the SIP domain exists
+	sipDomain, exists := state.sipDomains[domainSID]
+	if !exists {
+		return nil, fmt.Errorf("SIP domain %s not found", DomainSid)
+	}
+
+	// Convert mappings to API format
+	contents := make([]twilioopenapi.ApiV2010SipAuthCallsCredentialListMapping, 0, len(sipDomain.AuthCallsMappings))
+	for _, mapping := range sipDomain.AuthCallsMappings {
+		// sid is CredentialListSID
+		sidStr := string(mapping.CredentialListSID)
+		accountSidStr := string(mapping.AccountSID)
+		dateCreated := mapping.CreatedAt.UTC().Format(time.RFC1123Z)
+		dateUpdated := mapping.UpdatedAt.UTC().Format(time.RFC1123Z)
+
+		contents = append(contents, twilioopenapi.ApiV2010SipAuthCallsCredentialListMapping{
+			Sid:         &sidStr,
+			AccountSid:  &accountSidStr,
+			DateCreated: &dateCreated,
+			DateUpdated: &dateUpdated,
+		})
+	}
+
+	// Build simple pagination response (single page for now)
+	page := 0
+	pageSize := len(contents)
+	firstPageUri := fmt.Sprintf("/2010-04-01/Accounts/%s/SIP/Domains/%s/Auth/Calls/CredentialListMappings.json", accountSID, DomainSid)
+	uri := firstPageUri
+
+	return &twilioopenapi.ListSipAuthCallsCredentialListMappingResponse{
+		Contents:     contents,
+		End:          pageSize,
+		FirstPageUri: firstPageUri,
+		NextPageUri:  nil, // Single page for simplicity
+		Page:         page,
+		PageSize:     pageSize,
+		Start:        0,
+		Uri:          uri,
+	}, nil
+}
+
+// CreateSipCredential creates a new SIP credential within a credential list
+func (e *EngineImpl) CreateSipCredential(CredentialListSid string, params *twilioopenapi.CreateSipCredentialParams) (*twilioopenapi.ApiV2010SipCredential, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+	if params.Username == nil || *params.Username == "" {
+		return nil, fmt.Errorf("Username is required")
+	}
+	if params.Password == nil || *params.Password == "" {
+		return nil, fmt.Errorf("Password is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+	credentialListSID := model.SID(CredentialListSid)
+	username := *params.Username
+	password := *params.Password
+
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	// Lock only this subaccount
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	// Verify the credential list exists
+	_, exists = state.sipCredentialLists[credentialListSID]
+	if !exists {
+		return nil, fmt.Errorf("Credential list %s not found", CredentialListSid)
+	}
+
+	now := state.clock.Now()
+	sid := model.NewSipCredentialSID()
+
+	// Create the SIP credential
+	credential := &model.SipCredential{
+		SID:               sid,
+		AccountSID:        accountSID,
+		CredentialListSID: credentialListSID,
+		Username:          username,
+		Password:          password, // Store password internally
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	state.sipCredentials[sid] = credential
+
+	// Convert to Twilio API response format (password is NOT returned in the API)
+	sidStr := string(sid)
+	accountSidStr := string(accountSID)
+	credentialListSidStr := string(credentialListSID)
+	dateCreated := now.UTC().Format(time.RFC1123Z)
+	dateUpdated := now.UTC().Format(time.RFC1123Z)
+
+	return &twilioopenapi.ApiV2010SipCredential{
+		Sid:               &sidStr,
+		AccountSid:        &accountSidStr,
+		CredentialListSid: &credentialListSidStr,
+		Username:          &username,
+		DateCreated:       &dateCreated,
+		DateUpdated:       &dateUpdated,
+	}, nil
+}
+
+// ListSipCredential returns all SIP credentials for a credential list
+func (e *EngineImpl) ListSipCredential(CredentialListSid string, params *twilioopenapi.ListSipCredentialParams) ([]twilioopenapi.ApiV2010SipCredential, error) {
+	if params == nil || params.PathAccountSid == nil || *params.PathAccountSid == "" {
+		return nil, fmt.Errorf("PathAccountSid is required")
+	}
+
+	accountSID := model.SID(*params.PathAccountSid)
+	credentialListSID := model.SID(CredentialListSid)
+
+	// Get subaccount state
+	e.subAccountsMu.RLock()
+	state, exists := e.subAccounts[accountSID]
+	e.subAccountsMu.RUnlock()
+
+	if !exists {
+		return nil, notFoundError(accountSID)
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	// Verify the credential list exists
+	_, exists = state.sipCredentialLists[credentialListSID]
+	if !exists {
+		return nil, fmt.Errorf("Credential list %s not found", CredentialListSid)
+	}
+
+	// Find all credentials for this credential list
+	results := make([]twilioopenapi.ApiV2010SipCredential, 0)
+	for _, credential := range state.sipCredentials {
+		if credential.CredentialListSID == credentialListSID {
+			sidStr := string(credential.SID)
+			accountSidStr := string(credential.AccountSID)
+			credentialListSidStr := string(credential.CredentialListSID)
+			username := credential.Username
+			dateCreated := credential.CreatedAt.UTC().Format(time.RFC1123Z)
+			dateUpdated := credential.UpdatedAt.UTC().Format(time.RFC1123Z)
+
+			results = append(results, twilioopenapi.ApiV2010SipCredential{
+				Sid:               &sidStr,
+				AccountSid:        &accountSidStr,
+				CredentialListSid: &credentialListSidStr,
+				Username:          &username,
+				DateCreated:       &dateCreated,
+				DateUpdated:       &dateUpdated,
+			})
+		}
+	}
+
+	return results, nil
 }
 
 // UpdateCall applies updates to an existing call (status, callback URL, etc.)
@@ -1993,6 +2589,17 @@ func (e *EngineImpl) Snapshot(accountSID model.SID) (*StateSnapshot, error) {
 	}
 	saCopy.SigningKeys = signingKeys
 
+	// Copy SIP domains from state
+	sipDomains := make([]model.SipDomain, 0, len(state.sipDomains))
+	for _, domain := range state.sipDomains {
+		domainCopy := *domain
+		// Deep copy the mappings slices
+		domainCopy.AuthCallsMappings = append([]model.SipAuthCallsCredentialListMapping{}, domain.AuthCallsMappings...)
+		domainCopy.AuthRegistrationsMappings = append([]model.SipAuthRegistrationsCredentialListMapping{}, domain.AuthRegistrationsMappings...)
+		sipDomains = append(sipDomains, domainCopy)
+	}
+	saCopy.SipDomains = sipDomains
+
 	snap.SubAccounts[accountSID] = &saCopy
 
 	return snap, nil
@@ -2311,7 +2918,9 @@ func (e *EngineImpl) buildCallbackForm(clock Clock, call *model.Call) url.Values
 	form.Set("CallSid", string(call.SID))
 	form.Set("AccountSid", string(call.AccountSID))
 	form.Set("From", call.From)
+	form.Set("Caller", call.From)
 	form.Set("To", call.To)
+	form.Set("Called", call.To)
 	form.Set("CallStatus", string(call.Status))
 	form.Set("Direction", string(call.Direction))
 	form.Set("ApiVersion", e.apiVersion)
@@ -2320,7 +2929,9 @@ func (e *EngineImpl) buildCallbackForm(clock Clock, call *model.Call) url.Values
 	if call.ParentCallSID != nil {
 		form.Set("ParentCallSid", string(*call.ParentCallSID))
 	}
-
+	if call.SIPDomainSID != "" {
+		form.Set("SipDomainSid", call.SIPDomainSID)
+	}
 	return form
 }
 

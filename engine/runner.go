@@ -1225,6 +1225,9 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 		params.SetFrom(fromNumber)
 		params.SetTo(to)
 		params.SetUrl(urlStr)
+		if dial.Timeout > 0 {
+			params.SetTimeout(int(dial.Timeout.Seconds()))
+		}
 
 		if statusCallback != "" {
 			params.SetStatusCallback(statusCallback)
@@ -1310,21 +1313,32 @@ func (r *CallRunner) executeDialNumber(ctx context.Context, dial *twiml.Dial, nu
 	// Dial all sips
 	for _, sip := range sips {
 		var resolvedURL string
+		var resolvedStatusCallback string
 		var err error
 		if sip.URL != "" {
 			resolvedURL, err = resolveURL(currentTwimlDocumentURL, sip.URL)
 			if err != nil {
 				r.addCallEvent("sip.url_error", map[string]any{
-					"action": sip.URL,
-					"base":   currentTwimlDocumentURL,
-					"error":  err.Error(),
+					"url":   sip.URL,
+					"base":  currentTwimlDocumentURL,
+					"error": err.Error(),
 				})
 				return err
 			}
 		}
+		if sip.StatusCallback != "" {
+			resolvedStatusCallback, err = resolveURL(currentTwimlDocumentURL, sip.StatusCallback)
+			if err != nil {
+				r.addCallEvent("sip.status_callback_url_error", map[string]any{
+					"status_callback": sip.StatusCallback,
+					"base":            currentTwimlDocumentURL,
+					"error":           err.Error(),
+				})
+			}
+		}
 		wg.Add(1)
 		// SIP addresses are used as-is in the To field
-		go createChildCall(sip.SipAddress, resolvedURL, "", "")
+		go createChildCall(sip.SipAddress, resolvedURL, resolvedStatusCallback, sip.StatusCallbackEvent)
 	}
 
 	// Wait for all CreateCall operations to complete
@@ -2081,13 +2095,19 @@ func (r *CallRunner) buildCallForm() url.Values {
 	form.Set("CallSid", string(r.call.SID))
 	form.Set("AccountSid", string(r.call.AccountSID))
 	form.Set("From", r.call.From)
+	form.Set("Caller", r.call.From)
 	form.Set("To", r.call.To)
+	form.Set("Called", r.call.To)
 	form.Set("CallStatus", string(r.call.Status))
 	form.Set("Direction", string(r.call.Direction))
 	form.Set("ApiVersion", r.engine.apiVersion)
 
 	if r.call.ParentCallSID != nil {
 		form.Set("ParentCallSid", string(*r.call.ParentCallSID))
+	}
+
+	if r.call.SIPDomainSID != "" {
+		form.Set("SipDomainSid", r.call.SIPDomainSID)
 	}
 	// Add custom variables
 	for k, v := range r.call.Variables {

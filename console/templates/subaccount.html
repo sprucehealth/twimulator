@@ -188,6 +188,164 @@
                 {{end}}
             </section>
 
+            <!-- SIP Domains Section -->
+            <section class="resource-section">
+                <h3>SIP Domains</h3>
+                {{if .SipDomains}}
+                {{range .SipDomains}}
+                <div style="margin-bottom: 2rem; border: 1px solid #ddd; padding: 1rem; border-radius: 4px;">
+                    <h4 style="margin-top: 0;">{{.DomainName}}</h4>
+                    <div class="detail-grid" style="margin-bottom: 1rem;">
+                        <div class="detail-item">
+                            <label>SID</label>
+                            <div>{{.SID}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Friendly Name</label>
+                            <div>{{if .FriendlyName}}{{.FriendlyName}}{{else}}&mdash;{{end}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Voice URL</label>
+                            <div class="url-cell">{{if .VoiceUrl}}<a href="{{.VoiceUrl}}" target="_blank">{{.VoiceUrl}}</a>{{else}}&mdash;{{end}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Voice Method</label>
+                            <div>{{if .VoiceMethod}}{{.VoiceMethod}}{{else}}&mdash;{{end}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Voice Status Callback URL</label>
+                            <div class="url-cell">{{if .VoiceStatusCallbackUrl}}<a href="{{.VoiceStatusCallbackUrl}}" target="_blank">{{.VoiceStatusCallbackUrl}}</a>{{else}}&mdash;{{end}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Voice Status Callback Method</label>
+                            <div>{{if .VoiceStatusCallbackMethod}}{{.VoiceStatusCallbackMethod}}{{else}}&mdash;{{end}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>SIP Registration</label>
+                            <div>{{if .SipRegistration}}<span style="color: green;">✓ Enabled</span>{{else}}<span style="color: #999;">Disabled</span>{{end}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Secure (SRTP)</label>
+                            <div>{{if .Secure}}<span style="color: green;">✓ Enabled</span>{{else}}<span style="color: #999;">Disabled</span>{{end}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Created</label>
+                            <div>{{.CreatedAt.Format "2006-01-02 15:04"}}</div>
+                        </div>
+                    </div>
+
+                    <h5 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">Calls Auth Mappings</h5>
+                    {{if .CallsMappings}}
+                    <table style="margin-bottom: 1rem;">
+                        <thead>
+                            <tr>
+                                <th>Mapping SID</th>
+                                <th>Credential List</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .CallsMappings}}
+                            <tr>
+                                <td>{{.SID}}</td>
+                                <td><strong>{{.CredentialListName}}</strong></td>
+                                <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                    {{else}}
+                    <p style="color: #999; font-style: italic;">No calls auth mappings</p>
+                    {{end}}
+
+                    <h5 style="margin-top: 1rem; margin-bottom: 0.5rem;">Registrations Auth Mappings</h5>
+                    {{if .RegistrationsMappings}}
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Mapping SID</th>
+                                <th>Credential List</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .RegistrationsMappings}}
+                            <tr>
+                                <td>{{.SID}}</td>
+                                <td><strong>{{.CredentialListName}}</strong></td>
+                                <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                    {{else}}
+                    <p style="color: #999; font-style: italic;">No registrations auth mappings</p>
+                    {{end}}
+                </div>
+                {{end}}
+                {{else}}
+                <p class="empty">No SIP domains yet.</p>
+                {{end}}
+            </section>
+
+            <!-- SIP Credential Lists Section -->
+            <section class="resource-section">
+                <h3>SIP Credential Lists</h3>
+                {{if .SipCredentialLists}}
+                {{range .SipCredentialLists}}
+                <div style="margin-bottom: 2rem; border: 1px solid #ddd; padding: 1rem; border-radius: 4px;">
+                    <h4 style="margin-top: 0;">{{if .FriendlyName}}{{.FriendlyName}}{{else}}{{.SID}}{{end}}</h4>
+                    <div class="detail-grid" style="margin-bottom: 1rem;">
+                        <div class="detail-item">
+                            <label>SID</label>
+                            <div>{{.SID}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Friendly Name</label>
+                            <div>{{if .FriendlyName}}{{.FriendlyName}}{{else}}&mdash;{{end}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Created</label>
+                            <div>{{if not .CreatedAt.IsZero}}{{.CreatedAt.Format "2006-01-02 15:04"}}{{else}}&mdash;{{end}}</div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Updated</label>
+                            <div>{{if not .UpdatedAt.IsZero}}{{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}&mdash;{{end}}</div>
+                        </div>
+                    </div>
+
+                    <h5 style="margin-top: 1rem; margin-bottom: 0.5rem;">Credentials ({{len .Credentials}})</h5>
+                    {{if .Credentials}}
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>SID</th>
+                                <th>Username</th>
+                                <th>Created</th>
+                                <th>Updated</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .Credentials}}
+                            <tr>
+                                <td>{{.SID}}</td>
+                                <td><strong>{{.Username}}</strong></td>
+                                <td>{{if not .CreatedAt.IsZero}}{{.CreatedAt.Format "2006-01-02 15:04"}}{{else}}&mdash;{{end}}</td>
+                                <td>{{if not .UpdatedAt.IsZero}}{{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}&mdash;{{end}}</td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                    {{else}}
+                    <p style="color: #999; font-style: italic;">No credentials in this list</p>
+                    {{end}}
+                </div>
+                {{end}}
+                {{else}}
+                <p class="empty">No SIP credential lists yet.</p>
+                {{end}}
+            </section>
+
             <!-- Calls Section -->
             <section class="resource-section">
                 <h3>Calls</h3>

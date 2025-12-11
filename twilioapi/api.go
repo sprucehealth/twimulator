@@ -123,9 +123,14 @@ func (c *Client) CreateIncomingCall(from string, to string) (*twilioopenapi.ApiV
 	return c.engine.CreateIncomingCall(model.SID(c.subaccountSID), from, to)
 }
 
-// CreateOutgoingSoftphoneCall simulates an outgoing call using twilio softphones
+// CreateOutgoingSoftphoneCall simulates an outgoing call from twilio softphones
 func (c *Client) CreateOutgoingSoftphoneCall(from string, to string, accessToken string, params map[string]string) (*twilioopenapi.ApiV2010Call, error) {
-	return c.engine.CreateIncomingCallWithParams(model.SID(c.subaccountSID), from, to, accessToken, params)
+	return c.engine.CreateIncomingCallFromSoftphone(model.SID(c.subaccountSID), from, to, accessToken, params)
+}
+
+// CreateOutgoingSIPCall simulates an outgoing call from a sip phone
+func (c *Client) CreateOutgoingSIPCall(fromSIP string, toSIP string) (*twilioopenapi.ApiV2010Call, error) {
+	return c.engine.CreateIncomingCallFromSIP(model.SID(c.subaccountSID), fromSIP, toSIP)
 }
 
 // UpdateCall proxies call updates to the engine
@@ -256,4 +261,76 @@ func (c *Client) SetCallVoicemail(callSID model.SID, filePath string, duration i
 // GetRecording retrieves a recording by SID
 func (c *Client) GetRecording(recordingSID model.SID) (*model.Recording, error) {
 	return c.engine.GetRecording(model.SID(c.subaccountSID), recordingSID)
+}
+
+// CreateSipDomain creates a new SIP domain for the client's subaccount
+func (c *Client) CreateSipDomain(params *twilioopenapi.CreateSipDomainParams) (*twilioopenapi.ApiV2010SipDomain, error) {
+	if params == nil {
+		params = &twilioopenapi.CreateSipDomainParams{}
+	}
+	params.PathAccountSid = &c.subaccountSID
+	return c.engine.CreateSipDomain(params)
+}
+
+// ListSipCredentialList returns SIP credential lists for the client's subaccount
+func (c *Client) ListSipCredentialList(params *twilioopenapi.ListSipCredentialListParams) ([]twilioopenapi.ApiV2010SipCredentialList, error) {
+	if params == nil {
+		params = &twilioopenapi.ListSipCredentialListParams{}
+	}
+	params.PathAccountSid = &c.subaccountSID
+	return c.engine.ListSipCredentialList(params)
+}
+
+// CreateSipCredentialList creates a new SIP credential list for the client's subaccount
+func (c *Client) CreateSipCredentialList(params *twilioopenapi.CreateSipCredentialListParams) (*twilioopenapi.ApiV2010SipCredentialList, error) {
+	if params == nil {
+		params = &twilioopenapi.CreateSipCredentialListParams{}
+	}
+	params.PathAccountSid = &c.subaccountSID
+	return c.engine.CreateSipCredentialList(params)
+}
+
+// CreateSipAuthCallsCredentialListMapping creates a mapping between a credential list and a SIP domain for calls
+func (c *Client) CreateSipAuthCallsCredentialListMapping(DomainSid string, params *twilioopenapi.CreateSipAuthCallsCredentialListMappingParams) (*twilioopenapi.ApiV2010SipAuthCallsCredentialListMapping, error) {
+	if params == nil {
+		params = &twilioopenapi.CreateSipAuthCallsCredentialListMappingParams{}
+	}
+	params.PathAccountSid = &c.subaccountSID
+	return c.engine.CreateSipAuthCallsCredentialListMapping(DomainSid, params)
+}
+
+// CreateSipAuthRegistrationsCredentialListMapping creates a mapping between a credential list and a SIP domain for registrations
+func (c *Client) CreateSipAuthRegistrationsCredentialListMapping(DomainSid string, params *twilioopenapi.CreateSipAuthRegistrationsCredentialListMappingParams) (*twilioopenapi.ApiV2010SipAuthRegistrationsCredentialListMapping, error) {
+	if params == nil {
+		params = &twilioopenapi.CreateSipAuthRegistrationsCredentialListMappingParams{}
+	}
+	params.PathAccountSid = &c.subaccountSID
+	return c.engine.CreateSipAuthRegistrationsCredentialListMapping(DomainSid, params)
+}
+
+// PageSipAuthCallsCredentialListMapping returns a page of auth calls credential list mappings for a SIP domain
+func (c *Client) PageSipAuthCallsCredentialListMapping(DomainSid string, params *twilioopenapi.ListSipAuthCallsCredentialListMappingParams, pageToken, pageNumber string) (*twilioopenapi.ListSipAuthCallsCredentialListMappingResponse, error) {
+	if params == nil {
+		params = &twilioopenapi.ListSipAuthCallsCredentialListMappingParams{}
+	}
+	params.PathAccountSid = &c.subaccountSID
+	return c.engine.PageSipAuthCallsCredentialListMapping(DomainSid, params, pageToken, pageNumber)
+}
+
+// CreateSipCredential creates a new SIP credential within a credential list
+func (c *Client) CreateSipCredential(CredentialListSid string, params *twilioopenapi.CreateSipCredentialParams) (*twilioopenapi.ApiV2010SipCredential, error) {
+	if params == nil {
+		params = &twilioopenapi.CreateSipCredentialParams{}
+	}
+	params.PathAccountSid = &c.subaccountSID
+	return c.engine.CreateSipCredential(CredentialListSid, params)
+}
+
+// ListSipCredential returns all SIP credentials for a credential list
+func (c *Client) ListSipCredential(CredentialListSid string, params *twilioopenapi.ListSipCredentialParams) ([]twilioopenapi.ApiV2010SipCredential, error) {
+	if params == nil {
+		params = &twilioopenapi.ListSipCredentialParams{}
+	}
+	params.PathAccountSid = &c.subaccountSID
+	return c.engine.ListSipCredential(CredentialListSid, params)
 }
