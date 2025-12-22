@@ -224,7 +224,22 @@ func (r *CallRunner) fetchTwiML(ctx context.Context, method, targetURL string, f
 	var headers http.Header
 	var err error
 	if method == "GET" {
-		status, body, headers, err = r.engine.webhook.GET(reqCtx, targetURL)
+		urlWithParams, urlErr := url.Parse(targetURL)
+		if urlErr != nil {
+			r.addCallEvent("webhook.url_parse_error", map[string]any{
+				"url":   targetURL,
+				"error": urlErr.Error(),
+			})
+			return nil, fmt.Errorf("failed to parse URL %s: %w", targetURL, urlErr)
+		}
+		q := urlWithParams.Query()
+		for k, v := range callForm {
+			for _, val := range v {
+				q.Add(k, val)
+			}
+		}
+		urlWithParams.RawQuery = q.Encode()
+		status, body, headers, err = r.engine.webhook.GET(reqCtx, urlWithParams.String())
 	} else {
 		status, body, headers, err = r.engine.webhook.POST(reqCtx, targetURL, callForm)
 	}
@@ -1813,14 +1828,32 @@ func (r *CallRunner) executeWait(ctx context.Context, eventPrefix, waitURL, wait
 		reqCtx, cancel := context.WithTimeout(ctx, r.timeout)
 		defer cancel()
 
+		callForm := r.buildCallForm()
 		var status int
 		var body []byte
 		var headers http.Header
 		var fetchErr error
 		if waitURLMethod == "GET" {
-			status, body, headers, fetchErr = r.engine.webhook.GET(reqCtx, resolvedWaitURL)
+			urlWithParams, urlErr := url.Parse(resolvedWaitURL)
+			if urlErr != nil {
+				r.addCallEvent(eventPrefix+".wait_url_error", map[string]any{
+					"wait_url": resolvedWaitURL,
+					"error":    urlErr.Error(),
+				})
+				err := fmt.Errorf("failed to parse wait URL %s: %w", resolvedWaitURL, urlErr)
+				r.recordError(err)
+				return err
+			}
+			q := urlWithParams.Query()
+			for k, v := range callForm {
+				for _, val := range v {
+					q.Add(k, val)
+				}
+			}
+			urlWithParams.RawQuery = q.Encode()
+			status, body, headers, fetchErr = r.engine.webhook.GET(reqCtx, urlWithParams.String())
 		} else {
-			status, body, headers, fetchErr = r.engine.webhook.POST(reqCtx, resolvedWaitURL, nil)
+			status, body, headers, fetchErr = r.engine.webhook.POST(reqCtx, resolvedWaitURL, callForm)
 		}
 
 		if fetchErr != nil {
